@@ -3,7 +3,12 @@
 dcFlexExtract ("de-coupled flex_extract") is built on **flex_extract**, the software package that has
 retrieved ECMWF data for FLEXPART and FLEXTRA for many years. The idea, the processing chain, the Fortran
 program that computes the vertical velocity input and the flux disaggregation all come from that work.
-Without it this project would not exist, and we are grateful to its authors.
+Without it this project would not exist, and we¹²³ are grateful to its authors.
+
+¹Petri Clusius<br>
+²INAR (https://www.helsinki.fi/fi/inar)<br>
+³AMC-Lahti (www.amc-lahti.fi/)
+
 
 ## flex_extract and its authors
 
