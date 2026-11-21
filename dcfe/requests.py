@@ -26,19 +26,18 @@ from . import era5
 from .config import Config
 
 # groups
-ML, LNSP, GLNSP, SP, SL, FLUX, STATIC = "ML", "LNSP", "GLNSP", "SP", "SL", "FLUX", "STATIC"
+ML, LNSP, SP, SL, FLUX, STATIC = "ML", "LNSP", "SP", "SL", "FLUX", "STATIC"
 
 _GROUP_VARS = {
     ML: tuple(era5.ML_VARS),
-    LNSP: ("LNSP",),         # spectral
-    GLNSP: ("LNSP",),        # on the regular grid, like the model-level fields
+    LNSP: ("LNSP",),         # spectral (the flex_extract route)
     SP: ("SP",),             # ECMWF surface pressure, single levels
     SL: tuple(era5.SFC_AN_VARS),
     FLUX: tuple(era5.SFC_FLUX_VARS),
     STATIC: tuple(era5.SFC_STATIC_VARS),
 }
 _GROUP_DATASET = {
-    ML: era5.DATASET_MARS, LNSP: era5.DATASET_MARS, GLNSP: era5.DATASET_MARS, SP: era5.DATASET_SFC,
+    ML: era5.DATASET_MARS, LNSP: era5.DATASET_MARS, SP: era5.DATASET_SFC,
     SL: era5.DATASET_SFC, FLUX: era5.DATASET_SFC, STATIC: era5.DATASET_SFC,
 }
 
@@ -98,7 +97,8 @@ class Request:
     @property
     def relpath(self) -> str:
         full = _GROUP_VARS[self.group]
-        vtag = "all" if self.vars == full else "-".join(self.vars)
+        vtag = ("all" if self.vars == full else "all-LNSP" if self.vars == full + ("LNSP",)
+                else "-".join(self.vars))
         parts = [self.group, vtag]
         if self.levels:
             parts.append(f"L{self.levels[0]:03d}-{self.levels[1]:03d}")
@@ -129,7 +129,21 @@ class Request:
         """Number of GRIB messages the finished file must contain (used for sanity checks)."""
         if self.group == STATIC:
             return len(self.vars)
-        return len(self.vars) * self.nlevels * len(self.hours) * self.ndays
+        per_hour = len(self.ml_vars) * (self.nlevels + (1 if self.has_lnsp and self.levels[0] > 1 else 0))
+        if self.group == ML and self.has_lnsp:
+            per_hour += 1                    # LNSP exists on level 1 only
+        elif self.group != ML:
+            per_hour = len(self.vars) * self.nlevels
+        return per_hour * len(self.hours) * self.ndays
+
+    @property
+    def has_lnsp(self) -> bool:
+        """gridded LNSP rides along in this model-level request (--pressure lnsp)"""
+        return self.group == ML and "LNSP" in self.vars
+
+    @property
+    def ml_vars(self) -> tuple[str, ...]:
+        return tuple(v for v in self.vars if v != "LNSP") if self.group == ML else self.vars
 
     # ---- CDS request body -----------------------------------------------------------------
     def cds_request(self) -> dict:
@@ -138,13 +152,18 @@ class Request:
         if self.dataset == era5.DATASET_MARS:
             if self.group == LNSP:
                 params, levelist, grid = era5.LNSP_PARAM, "1", "OFF"   # spectral, as before
-            elif self.group == GLNSP:
-                params, levelist, grid = era5.LNSP_PARAM, "1", f"{_fmt(self.grid)}/{_fmt(self.grid)}"
             else:
-                params = "/".join(era5.ML_VARS[v] for v in self.vars)
-                a, b = self.levels
-                levelist = f"{a}/to/{b}" if b > a else str(a)
                 grid = f"{_fmt(self.grid)}/{_fmt(self.grid)}"
+                params = "/".join((era5.LNSP_PARAM if v == "LNSP" else era5.ML_VARS[v]) for v in self.vars)
+                a, b = self.levels
+                if not self.ml_vars:                      # only the gridded LNSP is left (after splits)
+                    levelist = "1"
+                elif self.has_lnsp and a > 1:
+                    # LNSP lives on level 1 only, so level 1 must be in the list. CDS answers HTTP 500 to
+                    # "1/60/to/137" (a lone level mixed with a range), so the levels are written out.
+                    levelist = "/".join(str(x) for x in [1] + list(range(a, b + 1)))
+                else:
+                    levelist = f"{a}/to/{b}" if b > a else str(a)
             return {
                 "class": "ea", "expver": "1", "stream": "oper", "type": "an", "levtype": "ml",
                 "accuracy": "24",           # 24-bit packing, as in the original (ETADOT needs it)
@@ -230,8 +249,8 @@ def _daterange(start: date, end: date):
 
 # Days per request to *try* first (CDS size limits are not documented; the downloader learns the
 # largest accepted size and shrinks from there). Single-level groups never cross a month boundary.
-DEFAULT_SPANS = {ML: 7, LNSP: 31, GLNSP: 31, SP: 31, SL: 31, FLUX: 31}
-ONE_DAY = {ML: 1, LNSP: 1, GLNSP: 1, SP: 1, SL: 1, FLUX: 1}
+DEFAULT_SPANS = {ML: 7, LNSP: 31, SP: 31, SL: 31, FLUX: 31}
+ONE_DAY = {ML: 1, LNSP: 1, SP: 1, SL: 1, FLUX: 1}
 
 
 def _chunks(days: list[date], span: int, same_month: bool):
@@ -256,19 +275,18 @@ def plan(cfg: Config, spans: Optional[dict] = None) -> list[Request]:
     flux_days = list(_daterange(cfg.start - pad, cfg.end + pad))
 
     units = []
-    def add(group, days, levels):
+    def add(group, days, levels, extra=()):
         for ch in _chunks(days, spans[group], same_month=_GROUP_DATASET[group] == era5.DATASET_SFC):
-            units.append(Request(group, ch[0], _GROUP_VARS[group], era5.HOURS, levels, ndays=len(ch), **common))
+            units.append(Request(group, ch[0], _GROUP_VARS[group] + extra, era5.HOURS, levels, ndays=len(ch), **common))
     add(SL, main_days, None)
     if cfg.pressure == "spectral":
         add(LNSP, main_days, (1, 1))
-    elif cfg.pressure == "lnsp":
-        add(GLNSP, main_days, (1, 1))
-    else:
+    elif cfg.pressure == "sp":
         add(SP, main_days, None)
-    for blk in level_blocks(cfg.level_first, cfg.level_last):
-        add(ML, main_days, blk)
+    for i, blk in enumerate(level_blocks(cfg.level_first, cfg.level_last)):
+        # --pressure lnsp: the gridded LNSP is requested together with the first level block (one request less)
+        add(ML, main_days, blk, extra=("LNSP",) if cfg.pressure == "lnsp" and i == 0 else ())
     add(FLUX, flux_days, None)
-    order = {STATIC: 0, SL: 1, SP: 1, FLUX: 2, LNSP: 3, GLNSP: 3, ML: 4}
+    order = {STATIC: 0, SL: 1, SP: 1, FLUX: 2, LNSP: 3, ML: 4}
     units.sort(key=lambda u: (u.day, order[u.group]))
     return [Request(STATIC, cfg.start, _GROUP_VARS[STATIC], (0,), None, **common)] + units

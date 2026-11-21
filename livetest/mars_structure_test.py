@@ -6,7 +6,7 @@
 # (CC BY 4.0; https://www.flexpart.eu/wiki/FpInputMetEcmwf). See NOTICE.md.
 
 """Can gridded LNSP (model level 1 only) be requested together with other model-level data in ONE MARS request?
-One hour, temperature + LNSP, levelist 1/60/to/137, test box. Re-attaches to the saved job when run again.
+One hour, temperature + LNSP, levelist 1/60/61/.../137 written out (the form 1/60/to/137 makes CDS answer HTTP 500), test box. Re-attaches to the saved job when run again.
 usage (repository root):  PYTHONPATH=. python -u livetest/mars_structure_test.py"""
 import json
 import os
@@ -16,7 +16,7 @@ from dcfe.client import DatastoresClient
 
 JOB = "livetest/structtest/job.json"
 BODY = {"class": "ea", "expver": "1", "stream": "oper", "type": "an", "levtype": "ml", "date": "20230830",
-        "time": "14", "levelist": "1/60/to/137", "param": "130.128/152.128", "grid": "0.25/0.25",
+        "time": "14", "levelist": "/".join(["1"] + [str(i) for i in range(60, 138)]), "param": "130.128/152.128", "grid": "0.25/0.25",
         "area": "61/21/59/25", "accuracy": "24"}
 
 c = DatastoresClient()
@@ -37,3 +37,14 @@ if st == "done":
     c.download(job, "livetest/structtest/test.grb")
     c.cleanup(job)
     print("downloaded", flush=True)
+
+if st == "done":
+    from collections import Counter
+    import eccodes as ec
+    from dcfe import gribio
+    msgs = gribio.read_all("livetest/structtest/test.grb")
+    print("messages:", len(msgs), dict(Counter(gribio.get_int(m, "paramId") for m in msgs)), flush=True)
+    for m in msgs:
+        if gribio.get_int(m, "paramId") == 152:
+            g = ec.codes_new_from_message(m)
+            print("LNSP:", {k: ec.codes_get(g, k) for k in ("gridType", "level", "typeOfLevel", "numberOfValues")}, flush=True)

@@ -30,3 +30,5 @@ livetest/structtest/
 livetest/out*/
 livetest/raw_*/
 livetest/t_*/
+livetest/raw_merged/
+livetest/out_*/

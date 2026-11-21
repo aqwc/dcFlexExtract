@@ -228,24 +228,56 @@ def test_split_reduces_days_first_and_covers_exactly():
     assert a.expected_messages + b.expected_messages == u.expected_messages
 
 
-def test_pressure_source_selects_one_pressure_group():
-    from dcfe.requests import GLNSP, LNSP, SP
-    got = {}
-    for src in ("lnsp", "sp", "spectral"):
-        units = plan(cfg(pressure=src))
-        got[src] = {u.group for u in units} & {LNSP, GLNSP, SP}
-    assert got == {"lnsp": {GLNSP}, "sp": {SP}, "spectral": {LNSP}}
+def test_pressure_source_selects_where_sp_comes_from():
+    from dcfe.requests import LNSP, SP
+    got = {src: {u.group for u in plan(cfg(pressure=src))} & {LNSP, SP} for src in ("lnsp", "sp", "spectral")}
+    assert got == {"lnsp": set(), "sp": {SP}, "spectral": {LNSP}}       # lnsp rides inside the model-level request
     assert era5.DEFAULT_PRESSURE == "lnsp"
     with pytest.raises(ValueError):
         cfg(pressure="bogus")
 
 
-def test_gridded_lnsp_and_sp_request_bodies():
-    from dcfe.requests import GLNSP, SP
-    g = next(u for u in plan(cfg(pressure="lnsp")) if u.group == GLNSP)
-    body = g.cds_request()
-    assert g.dataset == era5.DATASET_MARS and body["param"] == "152.128" and body["levelist"] == "1"
-    assert body["grid"] == "0.25/0.25" and body["levtype"] == "ml" and g.expected_messages == 24 * g.ndays
+def test_gridded_lnsp_is_merged_into_the_first_model_level_request():
+    ml = [u for u in plan(cfg(pressure="lnsp", levels=(60, 137))) if u.group == ML]
+    assert all(u.has_lnsp and u.vars[-1] == "LNSP" for u in ml)
+    body = ml[0].cds_request()
+    assert body["param"].endswith("/152.128") and body["grid"] == "0.25/0.25"
+    # CDS refuses '1/60/to/137'; the levels must be written out (verified live 2026-11-21)
+    assert body["levelist"] == "/".join(["1"] + [str(i) for i in range(60, 138)]) and "to" not in body["levelist"]
+    # level 1 comes along for every model-level variable, LNSP exists on level 1 only
+    assert ml[0].expected_messages == (7 * 79 + 1) * 24 * ml[0].ndays
+    assert "all-LNSP" in ml[0].relpath
+
+
+def test_lnsp_with_levels_from_1_goes_to_the_first_block_only_and_without_extra_level():
+    ml = [u for u in plan(cfg(pressure="lnsp", levels=(1, 137))) if u.group == ML]
+    first = [u for u in ml if u.levels == (1, 59)]
+    other = [u for u in ml if u.levels == (60, 137)]
+    assert all(u.has_lnsp for u in first) and not any(u.has_lnsp for u in other)
+    assert first[0].cds_request()["levelist"] == "1/to/59"
+    assert first[0].expected_messages == (7 * 59 + 1) * 24 * first[0].ndays
+    assert other[0].expected_messages == 7 * 78 * 24 * other[0].ndays
+
+
+def test_split_of_a_unit_with_lnsp_covers_exactly_the_same_messages():
+    u = next(u for u in plan(cfg(pressure="lnsp", start="20260105", end="20260105")) if u.group == ML)
+    todo, leaves = [u], []
+    while todo:                                           # follow the whole split ladder down to the leaves
+        x = todo.pop()
+        parts = [] if x.tiled or (len(x.vars) == 1 and len(x.hours) > 1) else x.split()   # stop before the tiles
+        if parts:
+            assert all(p.levels == x.levels for p in parts)            # levels are never split
+            todo += parts
+        else:
+            leaves.append(x)
+    assert [l for l in leaves if l.has_lnsp] and all(l.levels == u.levels for l in leaves)
+    lnsp_only = [l for l in leaves if l.vars == ("LNSP",)]
+    assert all(l.cds_request()["levelist"] == "1" for l in lnsp_only)
+    assert lnsp_only and all(l.expected_messages == len(l.hours) for l in lnsp_only)
+
+
+def test_sp_request_body():
+    from dcfe.requests import SP
     s = next(u for u in plan(cfg(pressure="sp")) if u.group == SP)
     assert s.dataset == era5.DATASET_SFC and s.cds_request()["variable"] == ["surface_pressure"]
-    assert s.expected_messages == 24 * s.ndays and s.relpath != g.relpath
+    assert s.expected_messages == 24 * s.ndays

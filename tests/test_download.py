@@ -44,12 +44,14 @@ class FakeClient:
 
     def _expected(self, ds, body):
         if ds == "reanalysis-era5-complete":
-            nvars = len(body["param"].split("/"))
-            a, _, b = body["levelist"].partition("/to/")
-            nlev = int(b) - int(a) + 1 if b else 1
+            params = body["param"].split("/")
+            lnsp = params.count("152.128")                  # exists on level 1 only
+            tok = body["levelist"].split("/")
+            nlev = (int(tok[2]) - int(tok[0]) + 1) if len(tok) == 3 and tok[1] == "to" else len(tok)
+            nvars = len(params) - lnsp
             d0, _, d1 = body["date"].partition("/to/")
             ndays = 1 if not d1 else (int(d1[6:]) - int(d0[6:]) + 1)     # tests stay within one month
-            return nvars * nlev * len(body["time"].split("/")) * ndays
+            return (nvars * nlev + lnsp) * len(body["time"].split("/")) * ndays
         return len(body["variable"]) * len(body["time"]) * len(body["day"])
 
     def submit(self, dataset, body):
@@ -190,9 +192,11 @@ def test_too_large_splits_by_variable_hours_then_tiles(tmp_path):
     assert split_ml
     # all ML data present exactly once: total messages of done ML leaves == original
     orig = next(r for r in plan(cfg) if r.group == "ML")
-    got = sum(Request.from_dict(u["request"]).expected_messages
+    def needed(r):          # level 1 of the model-level variables is only an extra that rides along with LNSP
+        return (len(r.ml_vars) * r.nlevels + r.has_lnsp) * len(r.hours) * r.ndays
+    got = sum(needed(Request.from_dict(u["request"]))
               for k, u in dl.manifest.units.items() if "/ML_" in k and u["state"] == DONE)
-    assert got == orig.expected_messages
+    assert got == needed(orig)
     assert not (tmp_path / "raw" / orig.relpath).exists()      # parent never downloaded as one file
 
 
@@ -318,7 +322,7 @@ def test_span_limit_is_learned_and_applied_to_pending_units(tmp_path):
     too_long = [b for b in sent_ml if "/to/" in b["date"] and int(b["date"].split("/to/")[1][6:]) - int(b["date"].split("/to/")[0][6:]) + 1 > 2]
     assert len(too_long) <= 4          # a few refused attempts, never repeated for every pending unit
     total_ml_msgs = sum(Request.from_dict(u["request"]).expected_messages for u in dl.leaves().values() if u["request"]["group"] == "ML")
-    assert total_ml_msgs == 16 * 7 * 78 * 24
+    assert total_ml_msgs == 16 * 24 * (7 * 79 + 1)      # default pressure=lnsp: level 1 + gridded LNSP ride along
 
 
 def test_manifest_remembers_learned_limit_across_restarts(tmp_path):

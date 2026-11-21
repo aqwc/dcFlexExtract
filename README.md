@@ -135,15 +135,19 @@ matters. Three sources:
 
 | `--pressure` | SP comes from | MARS requests | Fortran |
 |---|---|---|---|
-| `lnsp` (default) | exp(LNSP) of ERA5 model level 1, on the same grid as the other fields | one more (LNSP, level 1) | not used |
+| `lnsp` (default) | exp(LNSP) of ERA5 model level 1, on the same grid as the other fields | none: LNSP goes in the model-level request | not used |
 | `sp` | ECMWF's single-levels `surface_pressure` | none (single-levels queue, parallel) | not used |
-| `spectral` | spectral LNSP through `calc_etadot` (flex_extract's way) | one more (spectral LNSP) | `calc_etadot` |
+| `spectral` | spectral LNSP through `calc_etadot` (flex_extract's way) | one more (spectral LNSP, separate request) | `calc_etadot` |
 
 They are not identical: on the 2023-08-30 14 UTC test box exp(gridded LNSP) differs from the spectral SP by 20 Pa
 rms (max 52 Pa) and ECMWF's SP by 29 Pa rms (max 102 Pa); the effect on model-level heights is under 4 m (`lnsp`)
 or 8 m (`sp`) at level 60 and nil near the ground (`livetest/pressure_analysis.py`). With `lnsp` and `sp`
 `process` needs no Fortran build; ETADOT is converted by `dcfe/etadot.py` in all three. Use a new `--outdir` when
 you change source, and the same `--pressure` for `download` and `process`.
+
+With `lnsp` the model-level request also carries level 1, because LNSP lives there; the other variables come back
+on level 1 too (about 1/79 more data, ignored by `process`). CDS answers HTTP 500 to a level list that mixes a lone
+level with a range (`1/60/to/137`), so the levels are written out (`1/60/61/.../137`).
 
 ### Vertical velocity (ETADOT) and the integration boundary
 
