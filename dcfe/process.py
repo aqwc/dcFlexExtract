@@ -27,12 +27,15 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import era5, gribio
+import numpy as np
+
+from . import era5, etadot, gribio
 from .config import Config
 from .rawindex import RawIndex
 
 _ID = era5.PARAM_ID
 LOG = logging.getLogger("dcfe")
+SP_ID = 134          # surface pressure: not downloaded, computed by calc_etadot from LNSP
 
 
 def prefix_for(grid: float) -> str:
@@ -87,8 +90,42 @@ def _ml_msgs(ix: RawIndex, cfg: Config, name: str, T: datetime) -> list[bytes]:
     return [gribio.read(ix.ml[(_ID[name], T, lv)]) for lv in range(cfg.level_first, cfg.level_last + 1)]
 
 
+def _etadot_from_ground(msgs: list[bytes], ix: RawIndex, cfg: Config, T: datetime, lnsp: bytes) -> list[bytes]:
+    """Replace the ETADOT messages written by calc_etadot (running sum started at the top of the retrieved
+    levels) by the ground-start result, see etadot.py. Before replacing anything, our own implementation of
+    the legacy calculation must reproduce the Fortran values; otherwise we stop instead of writing numbers
+    we cannot account for."""
+    name = out_name(cfg, T)
+    pv = gribio.get_array(lnsp, "pv")
+    A, B = pv[: len(pv) // 2], pv[len(pv) // 2:]
+    if cfg.level_last != len(A) - 1:
+        LOG.warning("%s: levels end at %d, not at the lowest model level %d: the ground boundary cannot be used, "
+                    "ETADOT keeps the flex_extract (top) boundary", name, cfg.level_last, len(A) - 1)
+        return msgs
+    pid = {m: gribio.get_int(m, "paramId") for m in msgs}
+    ps = gribio.values(next(m for m in msgs if pid[m] == SP_ID))
+    raw = {lv: gribio.values(gribio.read(ix.ml[(_ID["ETADOT"], T, lv)])) for lv in range(cfg.level_first, cfg.level_last + 1)}
+    fortran = {gribio.get_int(m, "level"): gribio.values(m) for m in msgs if pid[m] == _ID["ETADOT"]}
+    legacy = etadot.half_level_flux(raw, ps, A, B, "top")
+    err = max(float(np.abs(legacy[k] - fortran[k]).max()) for k in legacy)
+    scale = max(float(np.abs(v).max()) for v in fortran.values())
+    if err > 1e-4 * scale + 1e-9:
+        raise RuntimeError(f"{name}: our reproduction of calc_etadot's ETADOT differs from it by {err:.3g} "
+                           f"(field maximum {scale:.3g}); not replacing it. Use --etadot-boundary top.")
+    ground = etadot.half_level_flux(raw, ps, A, B, "ground")
+    LOG.debug("%s: ETADOT from the ground boundary; our top-start reproduction matches calc_etadot to %.2g "
+              "(field max %.3g); mean change at the lowest level %.4g Pa/s", name, err, scale,
+              float(np.abs(ground[cfg.level_last] - legacy[cfg.level_last]).mean()))
+    out = []
+    for m in msgs:
+        if pid[m] == _ID["ETADOT"]:
+            m = gribio.modified(m, ground[gribio.get_int(m, "level")])
+        out.append(m)
+    return out
+
+
 def build_hour(ix: RawIndex, cfg: Config, T: datetime, exe: str | Path, outdir: Path, scratch: Path,
-               keep_scratch: bool = False) -> Path:
+               keep_scratch: bool = False, etadot_boundary: str = "ground") -> Path:
     final = outdir / out_name(cfg, T)
     if final.exists():
         return final
@@ -124,9 +161,14 @@ def build_hour(ix: RawIndex, cfg: Config, T: datetime, exe: str | Path, outdir: 
         LOG.error("%s: calc_etadot failed (exit status %d); full output:\n%s", out_name(cfg, T), r.returncode, text)
         raise RuntimeError(f"calc_etadot failed for {T} (log next to the output)")
 
+    msgs = gribio.read_all(work / "fort.15")
+    if etadot_boundary == "ground":
+        msgs = _etadot_from_ground(msgs, ix, cfg, T, lnsp)
+    elif etadot_boundary != "top":
+        raise ValueError(f"etadot_boundary must be 'ground' or 'top', not {etadot_boundary!r}")
     part = final.with_name(final.name + ".part")
     with open(part, "wb") as f:
-        f.write((work / "fort.15").read_bytes())
+        f.write(b"".join(msgs))
         for name in ("CLWC", "CIWC"):
             f.write(b"".join(_ml_msgs(ix, cfg, name, T)))
         for m in ix.flux_messages(T) + ix.surface_messages(T) + ix.static_messages():

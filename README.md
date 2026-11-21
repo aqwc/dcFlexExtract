@@ -124,9 +124,26 @@ overwritten, so reusing the old outdir would leave the old 60–137 files in pla
 `EA025YYMMDDHH` (prefix `EA` + grid×100) holds, per hour: U V ETADOT T SP Q on all levels, CLWC, CIWC,
 6 fluxes (disaggregated to instantaneous rates), 9 surface fields, 4 static fields; mixed GRIB1/GRIB2
 as delivered by CDS (FLEXPART v11 reads GRIB1, GRIB2 and mixed). SP is computed by `calc_etadot` from the
-spectral LNSP. Checked against an old flex_extract hourly file (566 messages): identical layout and surface
-fields; model-level fields differ by at most 2.5e-4 of a field's maximum (ETADOT near the surface),
-others far less.
+spectral LNSP. Checked against an old flex_extract hourly file (566 messages) with `--etadot-boundary top`:
+identical layout and surface fields; model-level fields differ by at most 2.5e-4 of a field's maximum (ETADOT
+near the surface), others far less.
+
+### Vertical velocity (ETADOT) and the integration boundary
+
+ERA5 gives `eta_dot` on full levels; FLEXPART needs `eta_dot * dp/deta` on half levels, which `calc_etadot`
+obtains with a running sum over the levels. That sum needs a starting value. flex_extract starts at the top of
+the **retrieved** levels with 0, which is only right when level 1 is included. For e.g. levels 60-137 the true
+value there is not zero (about 0.04 Pa/s in a test over southern Finland), and the error appears with
+alternating sign in every level and leaves a non-zero vertical velocity at the ground. dcFlexExtract therefore
+integrates upward from the ground, where the value is exactly zero, which is correct for any level range ending
+at the lowest level (checked against mass continuity: `livetest/etadot_continuity_test.py`).
+
+* `--etadot-boundary ground` (default): the corrected ETADOT. The Fortran step still runs; before its ETADOT is
+  replaced, our own implementation of its calculation must reproduce it (otherwise the run stops).
+* `--etadot-boundary top`: flex_extract's behaviour, for reproducing earlier output.
+
+Output files that already exist are skipped, so use a new `--outdir` when you switch the boundary. If the levels
+do not end at the lowest model level the ground boundary cannot be used and a warning is logged.
 
 ## Tests
 

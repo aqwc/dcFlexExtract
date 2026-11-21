@@ -67,6 +67,10 @@ def build_parser():
     pr.add_argument("--scratch", default=None, help="scratch dir (default: <outdir>/.scratch)")
     pr.add_argument("--keep-scratch", action="store_true")
     pr.add_argument("--check", action="store_true", help="only report what is missing for each hour")
+    pr.add_argument("--etadot-boundary", choices=("ground", "top"), default="ground",
+                    help="ETADOT (vertical velocity) is integrated upward from the ground, where it must be zero "
+                         "(default, correct for any level range), or - as flex_extract does - downward from the "
+                         "top of the retrieved levels, which gives an alternating error unless level 1 is included")
 
     c = sub.add_parser("cleanup", help="delete finished (successful) jobs stored in your CDS account")
     _outdir_arg(c, "only the log is written there")
@@ -84,7 +88,7 @@ def cmd_process(a):
     from .process import build_hour, hours, missing, out_name
     from .rawindex import RawIndex
     cfg = _cfg(a)
-    LOG.info("raw data: %s   output: %s", cfg.rawdir, cfg.outdir)
+    LOG.info("raw data: %s   output: %s   ETADOT boundary: %s", cfg.rawdir, cfg.outdir, a.etadot_boundary)
     ix = RawIndex.from_dir(cfg.rawdir)
     LOG.info("indexed %d raw files", ix.files)
     for p in sorted(Path(cfg.rawdir).rglob("*.grb")):
@@ -102,7 +106,7 @@ def cmd_process(a):
             bad += bool(miss)
             continue
         existed = (out / out_name(cfg, T)).exists()
-        f = build_hour(ix, cfg, T, a.exe, out, scratch, a.keep_scratch)
+        f = build_hour(ix, cfg, T, a.exe, out, scratch, a.keep_scratch, a.etadot_boundary)
         if existed:
             LOG.info("exists, skipped: %s", f.name)
         else:

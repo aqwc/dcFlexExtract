@@ -89,3 +89,23 @@ def get_int(msg: bytes, key: str) -> int:
         return ec.codes_get(g, key)
     finally:
         ec.codes_release(g)
+
+
+def get_array(msg: bytes, key: str) -> np.ndarray:
+    g = ec.codes_new_from_message(msg)
+    try:
+        return ec.codes_get_array(g, key)
+    finally:
+        ec.codes_release(g)
+
+
+def read_all(path: str | Path) -> list[bytes]:
+    """All messages of a GRIB file, in file order."""
+    out = []
+    with open(path, "rb") as fh:
+        while (g := ec.codes_grib_new_from_file(fh)):
+            try:
+                out.append(ec.codes_get_message(g))
+            finally:
+                ec.codes_release(g)
+    return out

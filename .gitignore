@@ -25,3 +25,6 @@ livetest/log.txt
 *.part
 *.lock
 .scratch/
+livetest/sp/
+livetest/structtest/
+livetest/out*/
