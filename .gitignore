@@ -1,0 +1,27 @@
+# environments and caches
+.venv/
+__pycache__/
+.pytest_cache/
+
+# build products
+fortran/*.o
+fortran/*.mod
+fortran/calc_etadot
+
+# run data: output, raw downloads (and their manifests)
+out/
+raw/
+
+# local only, for now
+CLAUDE.md
+
+# live-test data: large GRIB files, CDS job ids and logs from a personal account
+livetest/raw/
+livetest/out/
+livetest/lnspgrid/
+livetest/log.txt
+
+# stray runtime files
+*.part
+*.lock
+.scratch/

@@ -1,0 +1,4 @@
+Test data for calc_etadot, copied unchanged from flex_extract (Testing/Installation/Calc_etadot/;
+Anne Philipp, Leopold Haimberger, Petra Seibert; CC BY 4.0). expected.fort.15 is the original reference
+output fort.15. Run ./dcfe.sh selftest (it copies these files to a temporary directory and compares the
+result byte for byte). See ../../NOTICE.md.
