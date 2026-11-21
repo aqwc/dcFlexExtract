@@ -32,18 +32,26 @@ Licence: **CC BY 4.0**, as for flex_extract (`LICENSE`); `fortran/Makefile` is G
 
 ## Install
 
+Modules first: `dcfe.sh` installs nothing if the environment already provides what it needs.
+
 ```
-./dcfe.sh setup        # python venv (+eccodes, ecmwf-datastores-client), builds fortran/calc_etadot, self-test
-./dcfe.sh selftest     # re-run just the calc_etadot check (compares fort.15 byte for byte)
+./dcfe.sh setup               # checks Python, ecCodes, numpy, CDS client; installs only what is missing; builds + tests calc_etadot
+./dcfe.sh setup --no-fortran  # same, without the Fortran step (then --pressure spectral is not available)
+./dcfe.sh selftest            # re-run just the calc_etadot check (compares fort.15 byte for byte)
 ```
 
-Needs gfortran, make and ecCodes with its Fortran interface (pkg-config `eccodes_f90`, or `ECCODES_DIR`).
-EMOS is **not** needed (`fortran/fft99_lite.f90` replaces it).
-A working `~/.cdsapirc` (`url:` and `key:` lines) is read for CDS access.
+Needs: Python 3 with `numpy`, the ecCodes Python binding (`eccodes`) and `ecmwf-datastores-client`. Anything the
+loaded modules do not provide is pip-installed into a `.venv` that still sees the module packages
+(`--system-site-packages`). A working `~/.cdsapirc` (`url:` and `key:` lines) is read for CDS access.
 
-**CSC (Roihu):** `dcfe.sh` loads `sites/csc.sh` automatically (python-geo, gcc, openmpi, netcdf-c,
-netcdf-fortran, fftw, eccodes — the modules from the old `general_callscript.sh`). Force a site with
-`DCFE_SITE=csc|local`. Not yet exercised on Roihu with dcFlexExtract.
+The Fortran program `calc_etadot` is only used with `--pressure spectral` (and is built by `setup`). It needs
+gfortran, make and ecCodes with its Fortran interface (pkg-config `eccodes_f90`, or `ECCODES_DIR`). EMOS is **not**
+needed (`fortran/fft99_lite.f90` replaces it).
+
+**Modules per site** are in `sites/<site>.sh` (`DCFE_SITE=csc|local` forces one). On **CSC (Roihu)**: `python-geo` and
+`eccodes` are always loaded; `gcc` only for `setup`, `build`, `selftest` and `--pressure spectral`. Not yet exercised
+on Roihu; if linking ecCodes' Fortran interface needs more modules (e.g. openmpi, netcdf-fortran), add them to
+`site_modules_fortran` in `sites/csc.sh`.
 
 ## Use
 

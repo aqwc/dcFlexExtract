@@ -5,6 +5,7 @@
 # Builds on flex_extract, (C) 2014-2020 Anne Philipp, Leopold Haimberger and Petra Seibert
 # (CC BY 4.0; https://www.flexpart.eu/wiki/FpInputMetEcmwf). See NOTICE.md.
 
-# Site file for a laptop/workstation: needs gfortran, make, pkg-config with ecCodes (Fortran interface) and Python 3.10+.
-# Nothing to load. Set DCFE_PY to use a specific Python.
-:
+# Site file for a laptop/workstation: needs python3, and for the Fortran step gfortran, make and ecCodes with its
+# Fortran interface (pkg-config eccodes_f90 or ECCODES_DIR). Nothing to load. Set DCFE_PY to use a specific Python.
+site_modules_base() { :; }
+site_modules_fortran() { :; }

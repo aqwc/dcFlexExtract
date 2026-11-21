@@ -7,13 +7,18 @@
 #
 # Module list taken from flex_extract's Run/general_callscript.sh.
 
-# Site file for CSC (Roihu): the modules the old general_callscript.sh used, which are all that is needed.
-# (Module names are taken from that script; not yet exercised on Roihu with dcFlexExtract.)
+# Site file for CSC (Roihu). Modules first: nothing is installed by dcfe.sh unless a module cannot provide it.
+# Always loaded: python-geo (Python with numpy etc.) and eccodes (kept up to date by CSC).
+# Loaded only when the Fortran step is needed (setup, build, selftest, --pressure spectral): gcc.
+# (Not yet exercised on Roihu with dcFlexExtract. If linking ecCodes' Fortran interface turns out to need more,
+# e.g. openmpi or netcdf-fortran as in flex_extract's general_callscript.sh, add them to site_modules_fortran.)
 type module >/dev/null 2>&1 || source /etc/profile.d/modules.sh 2>/dev/null || true
-module load python-geo
-module load gcc
-module load openmpi
-module load netcdf-c
-module load netcdf-fortran
-module load fftw
-module load eccodes
+
+site_modules_base() {
+  module load python-geo
+  module load eccodes
+}
+
+site_modules_fortran() {
+  module load gcc
+}
