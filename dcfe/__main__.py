@@ -25,6 +25,10 @@ def _domain_args(p):
     p.add_argument("--area", required=True, nargs=4, type=float, metavar=("N", "W", "S", "E"))
     p.add_argument("--grid", type=float, default=0.25)
     p.add_argument("--levels", nargs=2, type=int, default=[60, 137], metavar=("FIRST", "LAST"))
+    p.add_argument("--pressure", choices=era5.PRESSURE_SOURCES, default=era5.DEFAULT_PRESSURE,
+                   help="source of the surface pressure: lnsp = exp(gridded LNSP from MARS) (default), "
+                        "sp = ECMWF single-levels surface pressure, spectral = spectral LNSP through calc_etadot "
+                        "(flex_extract's way; needs the Fortran build)")
 
 
 def _outdir_arg(p, what):
@@ -80,7 +84,7 @@ def build_parser():
 
 def _cfg(a):
     rawdir = a.rawdir or str(Path(a.outdir) / "raw")
-    return Config.make(a.start, a.end, a.area, a.grid, a.levels, rawdir=rawdir, outdir=a.outdir)
+    return Config.make(a.start, a.end, a.area, a.grid, a.levels, rawdir=rawdir, outdir=a.outdir, pressure=a.pressure)
 
 
 def cmd_process(a):
@@ -88,7 +92,7 @@ def cmd_process(a):
     from .process import build_hour, hours, missing, out_name
     from .rawindex import RawIndex
     cfg = _cfg(a)
-    LOG.info("raw data: %s   output: %s   ETADOT boundary: %s", cfg.rawdir, cfg.outdir, a.etadot_boundary)
+    LOG.info("raw data: %s   output: %s   ETADOT boundary: %s   pressure: %s", cfg.rawdir, cfg.outdir, a.etadot_boundary, cfg.pressure)
     ix = RawIndex.from_dir(cfg.rawdir)
     LOG.info("indexed %d raw files", ix.files)
     for p in sorted(Path(cfg.rawdir).rglob("*.grb")):
@@ -145,7 +149,7 @@ def cmd_download(a):
 
 
 def cmd_plan(a):
-    units = plan(Config.make(a.start, a.end, a.area, a.grid, a.levels), _spans(a.spans))
+    units = plan(Config.make(a.start, a.end, a.area, a.grid, a.levels, pressure=a.pressure), _spans(a.spans))
     for u in units:
         print(f"{u.queue.split('-era5-')[1]:14s} {u.expected_messages:6d}  {u.relpath}")
         if a.show_request:

@@ -28,3 +28,4 @@ livetest/log.txt
 livetest/sp/
 livetest/structtest/
 livetest/out*/
+livetest/raw_*/

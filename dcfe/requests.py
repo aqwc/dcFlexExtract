@@ -26,17 +26,19 @@ from . import era5
 from .config import Config
 
 # groups
-ML, LNSP, SL, FLUX, STATIC = "ML", "LNSP", "SL", "FLUX", "STATIC"
+ML, LNSP, GLNSP, SP, SL, FLUX, STATIC = "ML", "LNSP", "GLNSP", "SP", "SL", "FLUX", "STATIC"
 
 _GROUP_VARS = {
     ML: tuple(era5.ML_VARS),
-    LNSP: ("LNSP",),
+    LNSP: ("LNSP",),         # spectral
+    GLNSP: ("LNSP",),        # on the regular grid, like the model-level fields
+    SP: ("SP",),             # ECMWF surface pressure, single levels
     SL: tuple(era5.SFC_AN_VARS),
     FLUX: tuple(era5.SFC_FLUX_VARS),
     STATIC: tuple(era5.SFC_STATIC_VARS),
 }
 _GROUP_DATASET = {
-    ML: era5.DATASET_MARS, LNSP: era5.DATASET_MARS,
+    ML: era5.DATASET_MARS, LNSP: era5.DATASET_MARS, GLNSP: era5.DATASET_MARS, SP: era5.DATASET_SFC,
     SL: era5.DATASET_SFC, FLUX: era5.DATASET_SFC, STATIC: era5.DATASET_SFC,
 }
 
@@ -136,6 +138,8 @@ class Request:
         if self.dataset == era5.DATASET_MARS:
             if self.group == LNSP:
                 params, levelist, grid = era5.LNSP_PARAM, "1", "OFF"   # spectral, as before
+            elif self.group == GLNSP:
+                params, levelist, grid = era5.LNSP_PARAM, "1", f"{_fmt(self.grid)}/{_fmt(self.grid)}"
             else:
                 params = "/".join(era5.ML_VARS[v] for v in self.vars)
                 a, b = self.levels
@@ -150,7 +154,7 @@ class Request:
                 "levelist": levelist, "param": params, "grid": grid,
                 "area": "/".join(_fmt(x) for x in (n, w, s, e)),
             }
-        table = {SL: era5.SFC_AN_VARS, FLUX: era5.SFC_FLUX_VARS, STATIC: era5.SFC_STATIC_VARS}[self.group]
+        table = {SP: {"SP": era5.SP_VAR}, SL: era5.SFC_AN_VARS, FLUX: era5.SFC_FLUX_VARS, STATIC: era5.SFC_STATIC_VARS}[self.group]
         return {
             "product_type": ["reanalysis"],
             "variable": [table[v] for v in self.vars],
@@ -226,8 +230,8 @@ def _daterange(start: date, end: date):
 
 # Days per request to *try* first (CDS size limits are not documented; the downloader learns the
 # largest accepted size and shrinks from there). Single-level groups never cross a month boundary.
-DEFAULT_SPANS = {ML: 7, LNSP: 31, SL: 31, FLUX: 31}
-ONE_DAY = {ML: 1, LNSP: 1, SL: 1, FLUX: 1}
+DEFAULT_SPANS = {ML: 7, LNSP: 31, GLNSP: 31, SP: 31, SL: 31, FLUX: 31}
+ONE_DAY = {ML: 1, LNSP: 1, GLNSP: 1, SP: 1, SL: 1, FLUX: 1}
 
 
 def _chunks(days: list[date], span: int, same_month: bool):
@@ -256,10 +260,15 @@ def plan(cfg: Config, spans: Optional[dict] = None) -> list[Request]:
         for ch in _chunks(days, spans[group], same_month=_GROUP_DATASET[group] == era5.DATASET_SFC):
             units.append(Request(group, ch[0], _GROUP_VARS[group], era5.HOURS, levels, ndays=len(ch), **common))
     add(SL, main_days, None)
-    add(LNSP, main_days, (1, 1))
+    if cfg.pressure == "spectral":
+        add(LNSP, main_days, (1, 1))
+    elif cfg.pressure == "lnsp":
+        add(GLNSP, main_days, (1, 1))
+    else:
+        add(SP, main_days, None)
     for blk in level_blocks(cfg.level_first, cfg.level_last):
         add(ML, main_days, blk)
     add(FLUX, flux_days, None)
-    order = {STATIC: 0, SL: 1, FLUX: 2, LNSP: 3, ML: 4}
+    order = {STATIC: 0, SL: 1, SP: 1, FLUX: 2, LNSP: 3, GLNSP: 3, ML: 4}
     units.sort(key=lambda u: (u.day, order[u.group]))
     return [Request(STATIC, cfg.start, _GROUP_VARS[STATIC], (0,), None, **common)] + units

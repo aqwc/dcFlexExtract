@@ -29,6 +29,7 @@ class MsgRef:
     type_of_level: str
     step_type: str
     edition: int
+    grid_type: str = ""
 
 
 def _valid(g) -> datetime:
@@ -46,7 +47,8 @@ def scan(path: str | Path) -> list[MsgRef]:
             try:
                 refs.append(MsgRef(str(path), ec.codes_get_message_offset(g), ec.codes_get(g, "paramId"), _valid(g),
                                    ec.codes_get(g, "level"), ec.codes_get(g, "typeOfLevel"),
-                                   ec.codes_get(g, "stepType"), ec.codes_get(g, "edition")))
+                                   ec.codes_get(g, "stepType"), ec.codes_get(g, "edition"),
+                                   ec.codes_get(g, "gridType")))
             finally:
                 ec.codes_release(g)
     return refs

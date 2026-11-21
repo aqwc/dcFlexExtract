@@ -33,7 +33,9 @@ class RawIndex:
         self.flux: dict[tuple[int, datetime], gribio.MsgRef] = {}
         self.sfc: dict[tuple[int, datetime], gribio.MsgRef] = {}
         self.static: dict[int, gribio.MsgRef] = {}
-        self.lnsp: dict[datetime, gribio.MsgRef] = {}
+        self.lnsp: dict[datetime, gribio.MsgRef] = {}       # spectral LNSP
+        self.glnsp: dict[datetime, gribio.MsgRef] = {}      # LNSP on the regular grid
+        self.sp: dict[datetime, gribio.MsgRef] = {}         # ECMWF surface pressure
         self.ml: dict[tuple[int, datetime, int], gribio.MsgRef] = {}
         self.files = 0
         for p in sorted(paths):
@@ -54,7 +56,9 @@ class RawIndex:
         elif pid in _SFC_IDS:
             self.sfc.setdefault((pid, r.valid), r)
         elif pid == _ID["LNSP"]:
-            self.lnsp.setdefault(r.valid, r)
+            (self.lnsp if r.grid_type == "sh" else self.glnsp).setdefault(r.valid, r)
+        elif pid == _ID["SP"] and r.type_of_level == "surface":
+            self.sp.setdefault(r.valid, r)
         elif pid in _ML_IDS and r.type_of_level == "hybrid":
             self.ml.setdefault((pid, r.valid, r.level), r)
 

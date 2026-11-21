@@ -77,8 +77,10 @@ def namelist(cfg: Config, mnauf: int) -> str:
 
 def missing(ix: RawIndex, cfg: Config, T: datetime) -> list[str]:
     miss = ix.missing_for(T)
-    if T not in ix.lnsp:
-        miss.append("LNSP")
+    src = {"spectral": ("LNSP (spectral)", ix.lnsp), "lnsp": ("LNSP (gridded)", ix.glnsp),
+           "sp": ("SP (surface pressure)", ix.sp)}[cfg.pressure]
+    if T not in src[1]:
+        miss.append(src[0])
     for name in era5.ML_VARS:
         absent = [lv for lv in range(cfg.level_first, cfg.level_last + 1) if (_ID[name], T, lv) not in ix.ml]
         if absent:
@@ -124,6 +126,52 @@ def _etadot_from_ground(msgs: list[bytes], ix: RawIndex, cfg: Config, T: datetim
     return out
 
 
+def _surface_pressure_msg(ix: RawIndex, cfg: Config, T: datetime) -> tuple[bytes, np.ndarray]:
+    """(SP message, values in Pa) for the lnsp and sp routes. FLEXPART recognises surface pressure by
+    paramId 134 on the surface; the message is cut from ECMWF's own SP, or, for gridded LNSP, from the
+    surface geopotential message of the same hour (same grid, surface level) with exp(LNSP) as values."""
+    if cfg.pressure == "sp":
+        m = gribio.read(ix.sp[T])
+        return m, gribio.values(m)
+    ps = np.exp(gribio.values(gribio.read(ix.glnsp[T])))
+    z = gribio.read(ix.sfc[(_ID["Z"], T)])
+    return gribio.modified(z, ps, paramId=SP_ID, bitsPerValue=24), ps
+
+
+def _build_without_fortran(ix: RawIndex, cfg: Config, T: datetime, final: Path, etadot_boundary: str) -> Path:
+    """The lnsp and sp routes: surface pressure is given on the grid, so no spectral transform is needed.
+    U, V, T, Q pass through untouched; ETADOT is converted by etadot.py. Same message order as calc_etadot."""
+    name = final.name
+    u, v, t, q = (_ml_msgs(ix, cfg, n, T) for n in ("U", "V", "T", "Q"))
+    pv = gribio.get_array(u[0], "pv")
+    A, B = pv[: len(pv) // 2], pv[len(pv) // 2:]
+    sp_msg, ps = _surface_pressure_msg(ix, cfg, T)
+    raw_msgs = _ml_msgs(ix, cfg, "ETADOT", T)
+    raw = {cfg.level_first + i: gribio.values(m) for i, m in enumerate(raw_msgs)}
+    boundary = etadot_boundary
+    if boundary == "ground" and cfg.level_last != len(A) - 1:
+        LOG.warning("%s: levels end at %d, not at the lowest model level %d: ETADOT uses the top boundary",
+                    name, cfg.level_last, len(A) - 1)
+        boundary = "top"
+    H = etadot.half_level_flux(raw, ps, A, B, boundary)
+    eta = [gribio.modified(m, H[cfg.level_first + i]) for i, m in enumerate(raw_msgs)]
+    LOG.debug("%s: pressure source %s (SP %.1f..%.1f Pa), ETADOT boundary %s, no Fortran step",
+              name, cfg.pressure, float(ps.min()), float(ps.max()), boundary)
+    return _write_final(u + v + eta + t + [sp_msg] + q, ix, cfg, T, final)
+
+
+def _write_final(model_msgs: list[bytes], ix: RawIndex, cfg: Config, T: datetime, final: Path) -> Path:
+    part = final.with_name(final.name + ".part")
+    with open(part, "wb") as f:
+        f.write(b"".join(model_msgs))
+        for name in ("CLWC", "CIWC"):
+            f.write(b"".join(_ml_msgs(ix, cfg, name, T)))
+        for m in ix.flux_messages(T) + ix.surface_messages(T) + ix.static_messages():
+            f.write(m)
+    os.replace(part, final)
+    return final
+
+
 def build_hour(ix: RawIndex, cfg: Config, T: datetime, exe: str | Path, outdir: Path, scratch: Path,
                keep_scratch: bool = False, etadot_boundary: str = "ground") -> Path:
     final = outdir / out_name(cfg, T)
@@ -132,6 +180,8 @@ def build_hour(ix: RawIndex, cfg: Config, T: datetime, exe: str | Path, outdir: 
     miss = missing(ix, cfg, T)
     if miss:
         raise RuntimeError(f"cannot build {final.name}: missing {', '.join(miss)}")
+    if cfg.pressure != "spectral":
+        return _build_without_fortran(ix, cfg, T, final, etadot_boundary)
     work = scratch / f"{T:%Y%m%d%H}"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -166,14 +216,7 @@ def build_hour(ix: RawIndex, cfg: Config, T: datetime, exe: str | Path, outdir: 
         msgs = _etadot_from_ground(msgs, ix, cfg, T, lnsp)
     elif etadot_boundary != "top":
         raise ValueError(f"etadot_boundary must be 'ground' or 'top', not {etadot_boundary!r}")
-    part = final.with_name(final.name + ".part")
-    with open(part, "wb") as f:
-        f.write(b"".join(msgs))
-        for name in ("CLWC", "CIWC"):
-            f.write(b"".join(_ml_msgs(ix, cfg, name, T)))
-        for m in ix.flux_messages(T) + ix.surface_messages(T) + ix.static_messages():
-            f.write(m)
-    os.replace(part, final)
+    _write_final(msgs, ix, cfg, T, final)
     if not keep_scratch:
         shutil.rmtree(work, ignore_errors=True)
         LOG.debug("%s: scratch dir %s removed", out_name(cfg, T), work)

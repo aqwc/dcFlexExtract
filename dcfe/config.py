@@ -36,6 +36,7 @@ class Config:
     level_last: int = era5.DEFAULT_LEVELS[1]
     rawdir: Path = Path("raw")
     outdir: Path = Path("out")
+    pressure: str = era5.DEFAULT_PRESSURE      # lnsp | sp | spectral
 
     def __post_init__(self):
         if self.end < self.start:
@@ -46,6 +47,8 @@ class Config:
             raise ValueError("latitudes must be within -90..90")
         if self.east == self.west:
             raise ValueError("west and east are equal")
+        if self.pressure not in era5.PRESSURE_SOURCES:
+            raise ValueError(f"pressure must be one of {era5.PRESSURE_SOURCES}")
         if self.grid not in era5.VALID_GRIDS:
             raise ValueError(f"grid must be one of {era5.VALID_GRIDS}")
         if not (1 <= self.level_first <= self.level_last <= era5.MAX_LEVEL):
@@ -53,11 +56,11 @@ class Config:
 
     @classmethod
     def make(cls, start, end, area, grid=0.25, levels=era5.DEFAULT_LEVELS,
-             rawdir="raw", outdir="out") -> "Config":
+             rawdir="raw", outdir="out", pressure=era5.DEFAULT_PRESSURE) -> "Config":
         """area = (north, west, south, east); levels = (first, last)."""
         n, w, s, e = (float(x) for x in area)
         return cls(parse_date(start), parse_date(end), n, w, s, e, float(grid),
-                   int(levels[0]), int(levels[1]), Path(rawdir), Path(outdir))
+                   int(levels[0]), int(levels[1]), Path(rawdir), Path(outdir), pressure)
 
     @property
     def domain_tag(self) -> str:

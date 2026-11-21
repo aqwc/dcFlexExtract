@@ -28,7 +28,12 @@ ML_VARS = {
     "T": "130.128", "U": "131.128", "V": "132.128", "Q": "133.128",
     "ETADOT": "77.128", "CLWC": "246.128", "CIWC": "247.128",
 }
-LNSP_PARAM = "152.128"   # spherical harmonics, level 1
+LNSP_PARAM = "152.128"   # level 1; spherical harmonics (grid OFF) or, as GLNSP, on the regular grid
+SP_VAR = "surface_pressure"   # single-levels variable, the alternative pressure source
+
+# where the surface pressure of the hourly files comes from
+PRESSURE_SOURCES = ("lnsp", "sp", "spectral")
+DEFAULT_PRESSURE = "lnsp"
 
 # single-level analysis fields: name -> CDS variable name
 SFC_AN_VARS = {
@@ -59,7 +64,7 @@ VALID_GRIDS = (0.25, 0.5)
 PARAM_ID = {
     "T": 130, "U": 131, "V": 132, "Q": 133, "ETADOT": 77, "CLWC": 246, "CIWC": 247, "LNSP": 152,
     "SD": 141, "MSL": 151, "TCC": 164, "10U": 165, "10V": 166, "2T": 167, "2D": 168, "Z": 129, "LSM": 172,
-    "SDOR": 160, "CVL": 27, "CVH": 28, "FSR": 244,
+    "SDOR": 160, "CVL": 27, "CVH": 28, "FSR": 244, "SP": 134,
     "LSP": 142, "CP": 143, "SSHF": 146, "SSR": 176, "EWSS": 180, "NSSS": 181,
 }
 # order of the messages in a finished hourly file (as in the original flex_extract output):

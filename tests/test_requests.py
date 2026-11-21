@@ -20,7 +20,7 @@ def plan(c, spans=ONE_DAY):
 
 
 def cfg(**kw):
-    base = dict(start="20260105", end="20260107", area=(60, 20, -10, 130), levels=(60, 137))
+    base = dict(start="20260105", end="20260107", area=(60, 20, -10, 130), levels=(60, 137), pressure="spectral")
     base.update(kw)
     return Config.make(**base)
 
@@ -179,7 +179,7 @@ def test_static_never_split_by_hours():
 
 
 def test_small_domain_tiles_down_to_one_point_then_stops():
-    c = Config.make("20260105", "20260105", (61, 21, 59, 25), 0.25)
+    c = Config.make("20260105", "20260105", (61, 21, 59, 25), 0.25, pressure="spectral")
     r = next(u for u in plan(c) if u.group == STATIC)     # one hour: ladder goes vars -> tiles
     while len(r.vars) > 1:
         r = r.split()[0]
@@ -192,7 +192,7 @@ def test_small_domain_tiles_down_to_one_point_then_stops():
 
 
 def test_multi_day_units_respect_spans_and_months():
-    c = Config.make("20230829", "20230904", (61, 21, 59, 25), 0.25)       # crosses a month boundary
+    c = Config.make("20230829", "20230904", (61, 21, 59, 25), 0.25, pressure="spectral")       # crosses a month boundary
     units = _plan(c, {ML: 3, LNSP: 31, SL: 31, FLUX: 31})
     ml = [u for u in units if u.group == ML]
     assert [(u.day.day, u.ndays) for u in ml] == [(29, 3), (1, 3), (4, 1)]
@@ -207,7 +207,7 @@ def test_multi_day_units_respect_spans_and_months():
 
 
 def test_multi_day_requests_and_message_counts():
-    c = Config.make("20230830", "20230901", (61, 21, 59, 25), 0.25)
+    c = Config.make("20230830", "20230901", (61, 21, 59, 25), 0.25, pressure="spectral")
     u = next(u for u in _plan(c, {ML: 3}) if u.group == ML)
     r = u.cds_request()
     assert r["date"] == "20230830/to/20230901"
@@ -220,9 +220,32 @@ def test_multi_day_requests_and_message_counts():
 
 
 def test_split_reduces_days_first_and_covers_exactly():
-    c = Config.make("20230830", "20230905", (61, 21, 59, 25), 0.25)
+    c = Config.make("20230830", "20230905", (61, 21, 59, 25), 0.25, pressure="spectral")
     u = next(u for u in _plan(c, {ML: 7}) if u.group == ML)
     a, b = u.split()
     assert (a.ndays, b.ndays) == (4, 3) and b.day == a.last_day + __import__("datetime").timedelta(days=1)
     assert a.vars == b.vars == u.vars and a.hours == u.hours and not a.tiled
     assert a.expected_messages + b.expected_messages == u.expected_messages
+
+
+def test_pressure_source_selects_one_pressure_group():
+    from dcfe.requests import GLNSP, LNSP, SP
+    got = {}
+    for src in ("lnsp", "sp", "spectral"):
+        units = plan(cfg(pressure=src))
+        got[src] = {u.group for u in units} & {LNSP, GLNSP, SP}
+    assert got == {"lnsp": {GLNSP}, "sp": {SP}, "spectral": {LNSP}}
+    assert era5.DEFAULT_PRESSURE == "lnsp"
+    with pytest.raises(ValueError):
+        cfg(pressure="bogus")
+
+
+def test_gridded_lnsp_and_sp_request_bodies():
+    from dcfe.requests import GLNSP, SP
+    g = next(u for u in plan(cfg(pressure="lnsp")) if u.group == GLNSP)
+    body = g.cds_request()
+    assert g.dataset == era5.DATASET_MARS and body["param"] == "152.128" and body["levelist"] == "1"
+    assert body["grid"] == "0.25/0.25" and body["levtype"] == "ml" and g.expected_messages == 24 * g.ndays
+    s = next(u for u in plan(cfg(pressure="sp")) if u.group == SP)
+    assert s.dataset == era5.DATASET_SFC and s.cds_request()["variable"] == ["surface_pressure"]
+    assert s.expected_messages == 24 * s.ndays and s.relpath != g.relpath

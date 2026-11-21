@@ -35,3 +35,17 @@ def test_namelist_matches_reference_style():
 def test_namelist_dateline_wrap():
     cfg = Config.make("20230830", "20230830", (10, 170, 0, -170), 0.5)
     assert "maxl = 41," in namelist(cfg, 639)
+
+
+def test_missing_reports_the_pressure_source_that_was_chosen():
+    from types import SimpleNamespace
+    from dcfe import era5
+    from dcfe.process import missing
+    T = datetime(2023, 8, 30, 14)
+    ix = SimpleNamespace(missing_for=lambda t: [], lnsp={}, glnsp={}, sp={}, ml={})
+    for src, word in (("spectral", "spectral"), ("lnsp", "gridded"), ("sp", "surface pressure")):
+        cfg = Config.make("20230830", "20230830", (61, 21, 59, 25), 0.25, pressure=src)
+        assert any(word in m for m in missing(ix, cfg, T)), src
+    ix.sp[T] = object()        # only the chosen source counts
+    cfg = Config.make("20230830", "20230830", (61, 21, 59, 25), 0.25, pressure="lnsp")
+    assert any("gridded" in m for m in missing(ix, cfg, T))

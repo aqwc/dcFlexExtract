@@ -15,6 +15,7 @@ Only ERA5 is supported. You choose four things:
 | `--area N W S E` | latitude/longitude rectangle, degrees |
 | `--grid` | `0.25` (default) or `0.5` |
 | `--levels FIRST LAST` | model levels, default `60 137` (137 is the surface level) |
+| `--pressure` | surface pressure source, see below: `lnsp` (default), `sp`, `spectral` |
 | `--outdir DIR` | where everything of the run goes (default `out`): hourly files, raw data in `DIR/raw`, logs in `DIR/logs` |
 
 ## Origin and licence
@@ -123,10 +124,26 @@ overwritten, so reusing the old outdir would leave the old 60–137 files in pla
 
 `EA025YYMMDDHH` (prefix `EA` + grid×100) holds, per hour: U V ETADOT T SP Q on all levels, CLWC, CIWC,
 6 fluxes (disaggregated to instantaneous rates), 9 surface fields, 4 static fields; mixed GRIB1/GRIB2
-as delivered by CDS (FLEXPART v11 reads GRIB1, GRIB2 and mixed). SP is computed by `calc_etadot` from the
-spectral LNSP. Checked against an old flex_extract hourly file (566 messages) with `--etadot-boundary top`:
+as delivered by CDS (FLEXPART v11 reads GRIB1, GRIB2 and mixed). Checked against an old flex_extract hourly file (566 messages) with `--etadot-boundary top`:
 identical layout and surface fields; model-level fields differ by at most 2.5e-4 of a field's maximum (ETADOT
 near the surface), others far less.
+
+### Surface pressure (`--pressure`)
+
+FLEXPART takes the pressure of every model level from the surface pressure SP (A and B coefficients), so SP
+matters. Three sources:
+
+| `--pressure` | SP comes from | MARS requests | Fortran |
+|---|---|---|---|
+| `lnsp` (default) | exp(LNSP) of ERA5 model level 1, on the same grid as the other fields | one more (LNSP, level 1) | not used |
+| `sp` | ECMWF's single-levels `surface_pressure` | none (single-levels queue, parallel) | not used |
+| `spectral` | spectral LNSP through `calc_etadot` (flex_extract's way) | one more (spectral LNSP) | `calc_etadot` |
+
+They are not identical: on the 2023-08-30 14 UTC test box exp(gridded LNSP) differs from the spectral SP by 20 Pa
+rms (max 52 Pa) and ECMWF's SP by 29 Pa rms (max 102 Pa); the effect on model-level heights is under 4 m (`lnsp`)
+or 8 m (`sp`) at level 60 and nil near the ground (`livetest/pressure_analysis.py`). With `lnsp` and `sp`
+`process` needs no Fortran build; ETADOT is converted by `dcfe/etadot.py` in all three. Use a new `--outdir` when
+you change source, and the same `--pressure` for `download` and `process`.
 
 ### Vertical velocity (ETADOT) and the integration boundary
 
