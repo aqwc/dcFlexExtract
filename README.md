@@ -7,16 +7,45 @@ ERA5 → hourly FLEXPART input files, with the download **decoupled** from the p
 * **process** turns any directory of compliant ERA5 GRIB files (downloaded by `download` *or by hand*) into
   hourly FLEXPART files, running the Fortran `calc_etadot`.
 
-Only ERA5 is supported. You choose four things:
+Only ERA5 is supported. You choose the dates, the area, the grid and the model levels; everything else is fixed.
+`./dcfe.sh --help` lists all options with their use, `./dcfe.sh <command> --help` shows one command.
+
+## Options
+
+**Domain options** (`plan`, `download`, `process`; use the same values for all three):
 
 | option | meaning |
 |---|---|
-| `--start` / `--end` | the dates you want (`YYYYMMDD`); how they are chunked for CDS is not your concern |
+| `--start YYYYMMDD` / `--end YYYYMMDD` | first and last day, inclusive; how they are chunked for CDS is not your concern |
 | `--area N W S E` | latitude/longitude rectangle, degrees |
 | `--grid` | `0.25` (default) or `0.5` |
-| `--levels FIRST LAST` | model levels, default `60 137` (137 is the surface level) |
-| `--pressure` | surface pressure source, see below: `lnsp` (default), `sp`, `spectral` |
+| `--levels FIRST LAST` | model levels, default `60 137` (137 is the lowest level, at the surface). All levels of a run go into one request |
+| `--pressure` | surface pressure source: `lnsp` (default), `sp`, `spectral`; see *Surface pressure* below |
 | `--outdir DIR` | where everything of the run goes (default `out`): hourly files, raw data in `DIR/raw`, logs in `DIR/logs` |
+| `--rawdir DIR` | raw GRIB files (default `<outdir>/raw`); `process` searches it recursively |
+
+**`download`:**
+
+| option | meaning |
+|---|---|
+| `--once` | one step (collect finished jobs, submit new ones), then exit; for cron or short jobs. Without it the program loops until everything is done |
+| `--poll SECONDS` | wait between polls in loop mode (default 60) |
+| `--inflight-mars N` | open MARS jobs, i.e. model levels (default 2); MARS runs one request per user at a time, the others wait |
+| `--inflight-sfc N` | open single-levels jobs (default 3) |
+| `--split-order LIST` | how a request that CDS refuses is made smaller, first to last: any of `days`, `variables`, `area`, `levels`, `hours` (default in that order); kinds left out are never used. See *What the downloader does* |
+| `--spans ML=30,SL=31` | days per request to try first, by group (`ML LNSP SL SP FLUX`); default: the whole period (single-level groups: one calendar month). Normally not needed |
+
+**`process`:**
+
+| option | meaning |
+|---|---|
+| `--check` | only report what is missing for each hour; writes nothing |
+| `--etadot-boundary ground\|top` | vertical velocity integrated from the ground (default) or, as flex_extract did, from the top of the retrieved levels; see *Vertical velocity* |
+| `--exe PATH` | the `calc_etadot` executable (only for `--pressure spectral`) |
+| `--scratch DIR`, `--keep-scratch` | per-hour working files (default `<outdir>/.scratch`); keep them after the run |
+
+**`plan`** also takes `--show-request` (print the CDS request bodies) and `--spans`. **`cleanup`** takes `--outdir` and
+`--yes` (really delete finished CDS jobs; without it only the number is shown). **`setup`** takes `--no-fortran`.
 
 ## Origin and licence
 

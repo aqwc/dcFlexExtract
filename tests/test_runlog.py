@@ -81,3 +81,17 @@ def test_plan_accepts_the_same_options_as_the_other_commands_and_writes_nothing(
     assert e.value.code == 0
     assert f"raw data would go to {out / 'raw'}" in capsys.readouterr().out
     assert not out.exists()
+
+
+def test_every_option_is_documented_in_the_readme_and_the_main_help():
+    """a new flag must be described: in README.md and in the epilog of `dcfe --help`"""
+    import argparse
+    from pathlib import Path
+    from dcfe.__main__ import HELP_EPILOG, build_parser
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    sub = next(a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction))
+    flags = {o for p in sub.choices.values() for a in p._actions for o in a.option_strings if o.startswith("--")}
+    flags.discard("--help")
+    assert flags >= {"--pressure", "--split-order", "--etadot-boundary", "--once", "--show-request"}
+    assert [f for f in sorted(flags) if f not in readme] == []
+    assert [f for f in sorted(flags) if f not in HELP_EPILOG and f not in ("--show-request", "--yes")] == []

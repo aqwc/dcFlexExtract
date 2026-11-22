@@ -20,11 +20,13 @@ from .runlog import LOG
 
 
 def _domain_args(p):
-    p.add_argument("--start", required=True, help="YYYYMMDD")
-    p.add_argument("--end", required=True, help="YYYYMMDD, inclusive")
-    p.add_argument("--area", required=True, nargs=4, type=float, metavar=("N", "W", "S", "E"))
-    p.add_argument("--grid", type=float, default=0.25)
-    p.add_argument("--levels", nargs=2, type=int, default=[60, 137], metavar=("FIRST", "LAST"))
+    p.add_argument("--start", required=True, help="first day, YYYYMMDD")
+    p.add_argument("--end", required=True, help="last day, YYYYMMDD, inclusive")
+    p.add_argument("--area", required=True, nargs=4, type=float, metavar=("N", "W", "S", "E"),
+                   help="latitude/longitude rectangle in degrees, e.g. 61 21 59 25")
+    p.add_argument("--grid", type=float, default=0.25, help="grid spacing in degrees, 0.25 or 0.5 (default 0.25)")
+    p.add_argument("--levels", nargs=2, type=int, default=[60, 137], metavar=("FIRST", "LAST"),
+                   help="model levels, 137 is the lowest (default 60 137)")
     p.add_argument("--pressure", choices=era5.PRESSURE_SOURCES, default=era5.DEFAULT_PRESSURE,
                    help="source of the surface pressure: lnsp = exp(gridded LNSP from MARS) (default), "
                         "sp = ECMWF single-levels surface pressure, spectral = spectral LNSP through calc_etadot "
@@ -50,18 +52,109 @@ def _spans(text):
     return {k.strip().upper(): int(v) for k, v in (kv.split("=") for kv in text.split(",") if kv)}
 
 
+_HELP = (
+    ("WORKFLOW", None, [
+        ("dcfe.sh setup [--no-fortran]", "check what the loaded modules provide and prepare the environment; the Fortran "
+         "program is only needed for --pressure spectral (see README)"),
+        ("dcfe.sh plan <domain>", "show what would be requested; no network, no files"),
+        ("dcfe.sh download <domain>", "fetch from CDS; resumable, safe to Ctrl-C and run again"),
+        ("dcfe.sh process <domain>", "raw GRIB -> hourly FLEXPART files <outdir>/EA025YYMMDDHH"),
+        ("dcfe.sh cleanup [--yes]", "list / delete finished jobs stored in your CDS account"),
+    ], "Use the same domain options and the same --outdir for download and process."),
+    ("DOMAIN OPTIONS (plan, download, process)", None, [
+        ("--start YYYYMMDD, --end YYYYMMDD", "first and last day, inclusive"),
+        ("--area N W S E", "latitude/longitude rectangle in degrees"),
+        ("--grid 0.25|0.5", "grid spacing (default 0.25)"),
+        ("--levels FIRST LAST", "model levels, 137 is the lowest (default 60 137). All levels go in one request. "
+         "To add levels later, download just those levels into the same raw directory; process finds data by content."),
+        ("--pressure lnsp|sp|spectral", "where the surface pressure comes from (default lnsp). lnsp: exp(gridded "
+         "LNSP), carried in the model-level request, no Fortran. sp: ECMWF single-levels surface_pressure, no "
+         "Fortran. spectral: spectral LNSP through the Fortran calc_etadot, flex_extract's way. Use the same "
+         "value for download and process."),
+        ("--outdir DIR", "everything of a run: the hourly files, DIR/raw and DIR/logs (default out)"),
+        ("--rawdir DIR", "raw GRIB files (default <outdir>/raw); process searches it recursively"),
+    ], None),
+    ("DOWNLOAD OPTIONS", None, [
+        ("--once", "do one step (collect finished jobs, submit new ones) and exit, for cron or short jobs. "
+         "Without it: loop until everything is done."),
+        ("--poll SECONDS", "wait between polls in loop mode (default 60)"),
+        ("--inflight-mars N", "open MARS jobs, i.e. model levels (default 2). MARS runs one request per user at a "
+         "time, the others wait in the queue."),
+        ("--inflight-sfc N", "open single-levels jobs (default 3)"),
+        ("--split-order LIST", "how a request that CDS refuses is made smaller, first to last. Kinds: days, "
+         "variables, area, levels, hours (default in that order). Kinds not listed are never used. Leave out "
+         "'area' to keep every file whole-area (tiles cannot be assembled yet). "
+         "Example: --split-order days,variables,levels,hours"),
+        ("--spans ML=30,SL=31", "days per request to try first, by group (ML LNSP SL SP FLUX). Default: the whole "
+         "period for MARS groups, one calendar month for single-level groups. Normally not needed."),
+    ], None),
+    ("PROCESS OPTIONS", None, [
+        ("--check", "only report what is missing for each hour; write nothing"),
+        ("--etadot-boundary ground|top", "vertical velocity: integrate from the ground, where it is zero (default, "
+         "correct for any level range), or from the top of the retrieved levels as flex_extract did (reproduces "
+         "old output; wrong unless level 1 is included)"),
+        ("--exe PATH", "calc_etadot executable (--pressure spectral only)"),
+        ("--scratch DIR, --keep-scratch", "per-hour working files (default <outdir>/.scratch); keep them"),
+    ], None),
+    ("FILES", None, [
+        ("<outdir>/logs/<time>_<command>.log", "full log of each run; starts with the date and the command"),
+        ("<outdir>/logs/commands.log", "one line per run"),
+        ("<rawdir>/<domain>/manifest.json", "download state (job ids); keep it while downloading"),
+    ], "Existing output files are skipped, never overwritten: use a new --outdir when you change --pressure, "
+       "--levels or --etadot-boundary. README.md has the details."),
+)
+
+
+def _render_help(width: int = 78) -> str:
+    import textwrap
+    out = []
+    for title, _, items, note in _HELP:
+        out.append(title)
+        for flag, text in items:
+            out.append("  " + flag)
+            out.extend(textwrap.wrap(text, width, initial_indent="      ", subsequent_indent="      "))
+        if note:
+            out.append("")
+            out.extend(textwrap.wrap(note, width, initial_indent="  ", subsequent_indent="  "))
+        out.append("")
+    return "\n".join(out)
+
+
+HELP_EPILOG = _render_help()
+
+
+def _wrap(text, width=78):
+    import textwrap
+    return "\n".join(textwrap.wrap(text, width))
+
+
 def build_parser():
-    ap = argparse.ArgumentParser(prog="dcfe")
+    from .requests import SPLIT_ORDER
+    default_order = ",".join(SPLIT_ORDER)
+    ap = argparse.ArgumentParser(prog="dcfe", formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 description="dcFlexExtract: ERA5 from CDS to hourly FLEXPART input files.",
+                                 epilog=HELP_EPILOG)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("plan", help="list download units for a configuration (no network, no files)")
+    fmt = dict(formatter_class=argparse.RawDescriptionHelpFormatter)
+    ex = ("  dcfe.sh {} --start 20230830 --end 20230902 --area 61 21 59 25 \\\n"
+          "      --levels 60 137 --outdir /scratch/me/run1")
+    p = sub.add_parser("plan", help="list download units for a configuration (no network, no files)", **fmt,
+                       description=_wrap("Show the CDS requests a run would make, with expected message counts. "
+                                   "Nothing is sent or written."),
+                       epilog="Example:\n" + ex.format("plan") + " --show-request")
     _domain_args(p)
     _outdir_arg(p, "only used to show where the raw data would go; plan writes nothing")
     p.add_argument("--rawdir", default=None, help="raw data directory (default: <outdir>/raw)")
     p.add_argument("--show-request", action="store_true", help="also print the CDS request body")
-    p.add_argument("--spans", default="", metavar="ML=7,LNSP=31", help="days per request, by group")
+    p.add_argument("--spans", default="", metavar="ML=30,SL=31",
+                   help="days per request by group (ML LNSP SL SP FLUX); default: whole period / one month")
 
-    d = sub.add_parser("download", help="download (resumable); re-run to continue")
+    d = sub.add_parser("download", help="download (resumable); re-run to continue", **fmt,
+                       description=_wrap("Fetch the raw ERA5 data from CDS. Safe to stop (Ctrl-C) and run again: finished "
+                                   "files are kept and queued CDS jobs are re-attached. Run it in tmux/screen, "
+                                   "or use --once from cron. See 'dcfe.sh --help' for the split order."),
+                       epilog="Example:\n" + ex.format("download") + "\n  (cron)  ... download --once ...")
     _domain_args(d)
     _outdir_arg(d, "raw data goes to <outdir>/raw unless --rawdir is given")
     d.add_argument("--rawdir", default=None, help="where raw GRIB files are stored (default: <outdir>/raw)")
@@ -69,28 +162,37 @@ def build_parser():
     d.add_argument("--poll", type=float, default=60, help="seconds between polls in loop mode")
     d.add_argument("--inflight-mars", type=int, default=2, help="open jobs in the MARS queue (model levels, LNSP)")
     d.add_argument("--inflight-sfc", type=int, default=3, help="open jobs for single-level data (not MARS)")
-    d.add_argument("--split-order", type=_split_order, default=None, metavar="days,area,levels,variables,hours",
-                   help="how to split a request that CDS refuses, first to last (default: days,area,levels,"
-                        "variables,hours). Kinds you leave out are never used. Area (tiles) needs mosaicking "
+    d.add_argument("--split-order", type=_split_order, default=None, metavar=default_order,
+                   help="how to split a request that CDS refuses, first to last (default: " + default_order +
+                        "). Kinds you leave out are never used. Area (tiles) needs mosaicking "
                         "before process, which is not implemented yet: leave it out to keep every file whole-area")
-    d.add_argument("--spans", default="", metavar="ML=7,LNSP=31",
-                   help="days per request to try first, by group (ML LNSP SL FLUX); refused sizes are learned and halved")
+    d.add_argument("--spans", default="", metavar="ML=30,SL=31",
+                   help="days per request to try first, by group (ML LNSP SL SP FLUX); default: the whole period "
+                        "(single-level groups: one calendar month); refused sizes are learned and halved")
 
-    pr = sub.add_parser("process", help="raw GRIB -> hourly FLEXPART files (uses calc_etadot)")
+    pr = sub.add_parser("process", help="raw GRIB -> hourly FLEXPART files", **fmt,
+                        description=_wrap("Build the hourly FLEXPART files <outdir>/EA025YYMMDDHH from the raw GRIB files "
+                                    "(any source: downloaded by 'download' or by hand). Existing outputs are "
+                                    "skipped. Uses the Fortran calc_etadot only with --pressure spectral."),
+                       epilog="Examples:\n" + ex.format("process") + " --check      (what is missing?)\n" + ex.format("process"))
     _domain_args(pr)
     _outdir_arg(pr, "the hourly FLEXPART files are written here")
     pr.add_argument("--rawdir", default=None,
                     help="directory searched recursively for *.grb, any source (default: <outdir>/raw)")
-    pr.add_argument("--exe", default=str(Path(__file__).resolve().parent.parent / "fortran" / "calc_etadot"))
+    pr.add_argument("--exe", default=str(Path(__file__).resolve().parent.parent / "fortran" / "calc_etadot"),
+                    help="calc_etadot executable (only used with --pressure spectral)")
     pr.add_argument("--scratch", default=None, help="scratch dir (default: <outdir>/.scratch)")
-    pr.add_argument("--keep-scratch", action="store_true")
+    pr.add_argument("--keep-scratch", action="store_true", help="do not delete the per-hour working files")
     pr.add_argument("--check", action="store_true", help="only report what is missing for each hour")
     pr.add_argument("--etadot-boundary", choices=("ground", "top"), default="ground",
                     help="ETADOT (vertical velocity) is integrated upward from the ground, where it must be zero "
                          "(default, correct for any level range), or - as flex_extract does - downward from the "
                          "top of the retrieved levels, which gives an alternating error unless level 1 is included")
 
-    c = sub.add_parser("cleanup", help="delete finished (successful) jobs stored in your CDS account")
+    c = sub.add_parser("cleanup", help="delete finished (successful) jobs stored in your CDS account", **fmt,
+                       description=_wrap("CDS keeps finished jobs in your account; 'download' deletes the ones it has "
+                                   "fetched. This lists the rest (deleting them makes their data unavailable)."),
+                       epilog="Example:\n  dcfe.sh cleanup --outdir /scratch/me/run1 --yes")
     _outdir_arg(c, "only the log is written there")
     c.add_argument("--yes", action="store_true", help="really delete (default: only list how many)")
     return ap
