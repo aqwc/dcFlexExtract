@@ -30,7 +30,7 @@ from . import client as C
 from . import era5
 from .config import Config
 from .gribcount import count_messages
-from .requests import SPLIT_ORDER, Request, plan
+from .requests import _GROUP_VARS, SPLIT_ORDER, Request, plan
 
 # Open CDS jobs per queue. Single-level data does not use the MARS archive, so a few can run in
 # parallel; for MARS the user may run only one request at a time (the others wait in line).
@@ -65,7 +65,14 @@ class Manifest:
         os.replace(tmp, self.path)
 
     def add(self, req: Request):
-        self.units.setdefault(req.relpath, {"state": PENDING, "attempts": 0, "request": req.to_dict()})
+        u = self.units.setdefault(req.relpath, {"state": PENDING, "attempts": 0, "request": req.to_dict()})
+        if u["state"] == SPLIT and not u.get("refused"):
+            # it was only merged into a larger request earlier and is needed as such again: revive it
+            u.update(state=PENDING, children=[], job_id=None, attempts=0)
+
+
+# canonical order of the variables of a group (LNSP last), used when leftover variables are merged
+_VAR_ORDER = {g: v + (("LNSP",) if g == "ML" else ()) for g, v in _GROUP_VARS.items()}
 
 
 @dataclass
@@ -154,11 +161,52 @@ class Downloader:
             self.log(f"FAILED  {rp}: {u['error']}")
             return
         u.update(state=SPLIT, children=[k.relpath for k in kids], job_id=None)
+        if learn:
+            u["refused"] = True                    # CDS itself refused this one (not just split locally)
         for k in kids:
             self.manifest.add(k)
             if self._file_ok(k):
                 self.manifest.units[k.relpath]["state"] = DONE
         self.log(f"SPLIT   {rp} -> {len(kids)} parts ({reason[:80]})")
+        if len(kids) == 2 and kids[0].vars == req.vars[:-1] and kids[1].vars == req.vars[-1:]:
+            self._merge_leftovers(kids[1])
+
+    @staticmethod
+    def _family(r: Request):
+        """what must be equal for two units to be requested together: everything but the variables"""
+        return (r.group, r.day, r.ndays, r.levels, r.hours, r.area, r.grid, r.tiled, r.tile_depth)
+
+    def _merge_leftovers(self, left: Request):
+        """`left` is the variable dropped from a refused request. Dropped variables of the same family that
+        are still waiting go out together as ONE request (each request costs a queue wait); if that is refused
+        too, it is peeled again by the same rule."""
+        m = self.manifest
+        m.units[left.relpath]["leftover"] = True
+        others = []
+        for k, u in list(m.units.items()):
+            if k != left.relpath and u["state"] == PENDING and u.get("leftover"):
+                r = self._req(k)
+                if self._family(r) == self._family(left):
+                    others.append(r)
+        if not others:
+            return
+        order = {v: i for i, v in enumerate(_VAR_ORDER[left.group])}
+        names = sorted({v for r in others + [left] for v in r.vars}, key=lambda v: order.get(v, 99))
+        merged = Request(**{**left.__dict__, "vars": tuple(names)})
+        # never rebuild what CDS has already refused (or anything containing it), and never an existing unit
+        for k, u in m.units.items():
+            if u.get("refused") and self._family(self._req(k)) == self._family(left) \
+                    and set(self._req(k).vars) <= set(names):
+                return
+        if merged.relpath in m.units and m.units[merged.relpath]["state"] != SPLIT:
+            return
+        for r in others + [left]:
+            m.units[r.relpath].update(state=SPLIT, children=[merged.relpath], job_id=None)
+        m.add(merged)
+        m.units[merged.relpath]["leftover"] = True
+        if self._file_ok(merged):
+            m.units[merged.relpath]["state"] = DONE
+        self.log(f"MERGE   leftover variables {','.join(names)} -> {merged.relpath}")
 
     def _retry_or_fail(self, rp: str, msg: str):
         u = self.manifest.units[rp]

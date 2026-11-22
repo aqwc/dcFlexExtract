@@ -193,7 +193,7 @@ def test_too_large_is_split_by_days_area_then_levels_and_covers_everything_once(
 
     beh = lambda ds, body: "too_large" if ds == "reanalysis-era5-complete" and size(body) > 150_000 else None
     cfg, fc = mkcfg(tmp_path, pressure="spectral"), FakeClient(beh)
-    dl = Downloader(cfg, fc, **quiet())
+    dl = Downloader(cfg, fc, split_order=("days", "area", "levels"), **quiet())
     run(dl)
     assert dl.summary().get(FAILED, 0) == 0
     orig = next(r for r in plan(cfg) if r.group == "ML")
@@ -382,3 +382,35 @@ def test_split_order_without_area_never_makes_tiles_and_without_days_never_learn
     assert ml and not any(r.tiled for r in ml) and all(r.ndays == 2 for r in ml)       # days stayed together
     assert all(r.nlevels * 2 <= 40 for r in ml) and sum(r.nlevels for r in ml) == 78
     assert "ML" not in dl.manifest.meta["max_days"]                                     # no day-span was learned
+
+
+def test_variables_are_dropped_one_at_a_time_and_leftovers_go_out_together(tmp_path):
+    """CDS accepts at most 4 variables: 7 refused -> 6 refused -> 5 refused -> 4 accepted, and the three dropped
+    variables are requested together (one request), not one by one."""
+    asked = []
+
+    def beh(ds, b):
+        if ds == "reanalysis-era5-complete" and b["param"] != "152.128":      # (not the spectral LNSP request)
+            asked.append(len(b["param"].split("/")))
+            return "too_large" if asked[-1] > 4 else None
+    cfg, fc = mkcfg(tmp_path, pressure="spectral"), FakeClient(beh)
+    dl = Downloader(cfg, fc, split_order=("variables",), **quiet())
+    run(dl)
+    assert dl.summary().get(FAILED, 0) == 0
+    ml = [Request.from_dict(u["request"]) for k, u in dl.manifest.units.items() if "/ML_" in k and u["state"] == DONE]
+    assert sorted(len(r.vars) for r in ml) == [3, 4]                       # two requests, not 4 + 1 + 1 + 1
+    assert sorted(v for r in ml for v in r.vars) == sorted(next(r for r in plan(cfg) if r.group == "ML").vars)
+    assert asked[:3] == [7, 6, 5] and sorted(asked[3:]) == [3, 4]          # three free refusals, two real requests
+
+
+def test_a_request_is_never_rebuilt_from_leftovers_when_it_was_already_refused(tmp_path):
+    """CVL alone is refused: merging leftovers must not recreate a refused combination, and nothing may be lost"""
+    cfg = mkcfg(tmp_path, area=(60.25, 22, 60, 22.25))
+    beh = lambda ds, b: "too_large" if "low_vegetation_cover" in b.get("variable", []) else None
+    dl = Downloader(cfg, FakeClient(beh), split_order=("variables",), **quiet())
+    run(dl)
+    st = [Request.from_dict(u["request"]) for k, u in dl.manifest.units.items() if "/STATIC_" in k and u["state"] == DONE]
+    got = sorted(v for r in st for v in r.vars)
+    assert got == ["CVH", "FSR", "SDOR"]                                   # everything but the refused CVL, each once
+    failed = [k for k, u in dl.manifest.units.items() if u["state"] == FAILED]
+    assert len(failed) == 1 and "STATIC_CVL" in failed[0]

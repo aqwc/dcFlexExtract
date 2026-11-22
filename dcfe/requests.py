@@ -29,7 +29,7 @@ from .config import Config
 MAX_AREA_SPLITS = 3
 # kinds of split, and the default order in which they are tried after CDS refused a request
 SPLIT_KINDS = ("days", "area", "levels", "variables", "hours")
-SPLIT_ORDER = SPLIT_KINDS
+SPLIT_ORDER = ("days", "variables", "area", "levels", "hours")
 
 # groups
 ML, LNSP, SP, SL, FLUX, STATIC = "ML", "LNSP", "SP", "SL", "FLUX", "STATIC"
@@ -195,8 +195,8 @@ class Request:
     def split(self, order: tuple[str, ...] = None) -> list["Request"]:
         """Smaller units covering exactly the same data, tried only after CDS refused the larger one.
         `order` lists the kinds of split to try, first to last (default SPLIT_ORDER): days (halving, down to
-        one day), area (halving, at most MAX_AREA_SPLITS times = 1/8 of the domain), levels (halving),
-        variables, hours. When "area" is in the order, still smaller tiles are the very last resort.
+        one day), variables (one variable dropped at a time), area (halving, at most MAX_AREA_SPLITS times =
+        1/8 of the domain), levels (halving), hours (halving). When "area" is in the order, still smaller tiles are the very last resort.
         A kind that is not listed is never used. Returns [] when nothing is left to divide.
         Parts are plain GRIB; day, level, variable and hour parts are simply concatenated, tiles must be
         mosaicked back to the domain."""
@@ -226,8 +226,9 @@ class Request:
                 # the lower part keeps LNSP, if any (LNSP is on level 1; the level list is written out)
                 return [rep(levels=(a, m)), rep(levels=(m + 1, b), vars=self.ml_vars)]
             if kind == "variables" and len(self.vars) > 1:
-                a, b = halves(self.vars)
-                return [rep(vars=a), rep(vars=b)]
+                # drop one variable at a time: the request without the last variable, and that variable
+                # on its own (the downloader merges leftovers of the same family into one request)
+                return [rep(vars=self.vars[:-1]), rep(vars=self.vars[-1:])]
             if kind == "hours" and len(self.hours) > 1 and self.group != STATIC:
                 a, b = halves(self.hours)
                 return [rep(hours=a), rep(hours=b)]

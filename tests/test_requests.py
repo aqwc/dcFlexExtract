@@ -162,34 +162,35 @@ def test_split_order_days_then_area_then_levels_then_variables_then_hours():
     variables, hours"""
     u = next(u for u in _plan(cfg(end="20260108")) if u.group == ML)        # 4 days in one request
     assert u.ndays == 4 and u.tile_depth == 0
-    a, b = u.split()                                                       # days first
+    O = ("days", "area", "levels", "variables", "hours")                   # (the default order is different)
+    a, b = u.split(O)                                                      # days first
     assert (a.ndays, b.ndays) == (2, 2) and a.area == u.area and a.levels == u.levels
-    one = a.split()[0].split()[0] if a.ndays == 2 else a
-    one = a.split()[0]
+    one = a.split(O)[0].split(O)[0] if a.ndays == 2 else a
+    one = a.split(O)[0]
     assert one.ndays == 1
     r = one
     for depth in (1, 2, 3):                                                # then the area, three times
-        parts = r.split()
+        parts = r.split(O)
         assert all(p.tiled and p.tile_depth == depth and p.levels == one.levels for p in parts)
         assert all(p.vars == one.vars and p.hours == one.hours for p in parts)
         r = parts[0]
-    lo, hi = r.split()                                                     # then the levels
+    lo, hi = r.split(O)                                                     # then the levels
     assert lo.levels[0] == r.levels[0] and hi.levels[1] == r.levels[1] and lo.levels[1] + 1 == hi.levels[0]
     assert lo.area == hi.area == r.area and lo.vars == hi.vars == r.vars and lo.tile_depth == 3
     single = r
     while single.nlevels > 1:
-        single = single.split()[0]
-    v1, v2 = single.split()                                                # then the variables
-    assert len(v1.vars) + len(v2.vars) == len(single.vars) and v1.hours == single.hours
+        single = single.split(O)[0]
+    v1, v2 = single.split(O)                                                # then the variables, one dropped
+    assert v1.vars == single.vars[:-1] and v2.vars == single.vars[-1:] and v1.hours == single.hours
     one_var = single
     while len(one_var.vars) > 1:
-        one_var = one_var.split()[0]
-    h1, h2 = one_var.split()                                               # then the hours
+        one_var = one_var.split(O)[0]
+    h1, h2 = one_var.split(O)                                               # then the hours
     assert h1.vars == h2.vars == one_var.vars and len(h1.hours) + len(h2.hours) == len(one_var.hours)
     one_hour = one_var
     while len(one_hour.hours) > 1:
-        one_hour = one_hour.split()[0]
-    t1, t2 = one_hour.split()                                              # last resort: still smaller tiles
+        one_hour = one_hour.split(O)[0]
+    t1, t2 = one_hour.split(O)                                              # last resort: still smaller tiles
     assert t1.tiled and t1.tile_depth == 4 and t1.relpath != t2.relpath
 
 
@@ -341,3 +342,12 @@ def test_cli_split_order_parsing():
     for bad in ("days,days", "weeks", ""):
         with pytest.raises(argparse.ArgumentTypeError):
             _split_order(bad)
+
+
+def test_default_order_drops_variables_before_splitting_the_area():
+    from dcfe.requests import SPLIT_ORDER
+    assert SPLIT_ORDER == ("days", "variables", "area", "levels", "hours")
+    u = next(u for u in _plan(cfg(start="20260105", end="20260105", pressure="spectral")) if u.group == ML)
+    assert u.ndays == 1
+    a, b = u.split()                                                        # no days left to halve
+    assert a.vars == u.vars[:-1] and b.vars == u.vars[-1:] and a.area == u.area and not a.tiled

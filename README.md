@@ -110,16 +110,18 @@ Every `download`, `process` and `cleanup` run writes a log in `<outdir>/logs/`:
   their content, so a restart re-uses finished files and re-attaches to jobs still queued at CDS (job ids
   are kept in `raw/<domain>/manifest.json`). A file is only accepted if its GRIB message count is right.
 * **Always the largest request first.** The whole period goes into one MARS request (single-level requests: one
-  per calendar month the run touches, containing only the days of that month), all chosen levels, the whole area. Only if CDS refuses it is it split, in this order: days
-  (halving, down to single days) → area (halving, three times, i.e. down to 1/8 of the domain) → model levels
-  (halving) → variables → hours → still smaller tiles. The largest accepted number of days per group is learned
-  and reused. Day, level, variable and hour parts are plain GRIB and are simply concatenated by `process`.
+  per calendar month the run touches, containing only the days of that month), all chosen levels, the whole area.
+  Only if CDS refuses it is it split, in this order: days (halving, down to single days) → variables (one is dropped
+  at a time until the request is accepted; the dropped variables of the same request are asked for together, and
+  peeled the same way if that is refused too) → area (halving, three times, i.e. down to 1/8 of the domain) →
+  model levels (halving) → hours → still smaller tiles. A refusal comes back immediately and costs no queue
+  wait; only accepted requests wait. The largest accepted number of days per group is learned and reused. Day, variable,
+  level and hour parts are plain GRIB and are simply concatenated by `process`.
   **Tiles are not**: they are sub-areas of the same fields and must be mosaicked to the full grid, which `process`
-  cannot do yet; it stops with a clear message if it finds tiled data (`--pressure`, `--levels` and the area
-  decide the size of a request, so a refusal at 1/8 of the area is unlikely for ordinary domains).
-  `download --split-order days,levels,variables,hours` sets the order yourself: kinds you leave out are never
+  cannot do yet; it stops with a clear message if it finds tiled data.
+  `download --split-order days,variables,levels,hours` sets the order yourself: kinds you leave out are never
   used (leave out `area` and no file is ever a tile; a request that is still refused then fails with a clear
-  message). Valid kinds: `days`, `area`, `levels`, `variables`, `hours`; default `days,area,levels,variables,hours`.
+  message). Valid kinds: `days`, `variables`, `area`, `levels`, `hours`; default `days,variables,area,levels,hours`.
 * Queues: MARS (`reanalysis-era5-complete`: model levels, LNSP) allows one running request per user, so
   `--inflight-mars` defaults to 2; single-level data is not MARS and runs `--inflight-sfc` (3) jobs in
   parallel. Each finished CDS job is deleted after a verified download. `./dcfe.sh cleanup` lists
