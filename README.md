@@ -174,6 +174,31 @@ at the lowest level (checked against mass continuity: `livetest/etadot_continuit
 Output files that already exist are skipped, so use a new `--outdir` when you switch the boundary. If the levels
 do not end at the lowest model level the ground boundary cannot be used and a warning is logged.
 
+## Checklist: first run on CSC (Roihu)
+
+Not yet exercised on Roihu. Go in this order; stop at the first failing step and note the exact message.
+
+1. **Get the code** and enter it: `git clone https://github.com/pclusius/dcFlexExtract && cd dcFlexExtract`.
+2. **CDS key:** `~/.cdsapirc` has the `url:` and `key:` lines (`chmod 600`).
+3. **Environment:** `./dcfe.sh setup`. Check in the printed list that `eccodes`, `numpy` and `ecmwf.datastores` are
+   *found*. If one is `NOT found`, only that package is pip-installed into `.venv`; note which one it was. Then
+   `calc_etadot works` must appear. If the Fortran link fails, read the error: add the module it asks for
+   (e.g. openmpi, netcdf-fortran) to `site_modules_fortran` in `sites/csc.sh`. Without Fortran use `setup --no-fortran`.
+4. **Tests:** `python -m pytest -q tests` (needs pytest; no network). Expect all to pass.
+5. **Plan, no network:** `./dcfe.sh plan --start 20230830 --end 20230830 --area 61 21 59 25 --levels 60 137`
+   prints 4 units, one of them `ML_all-LNSP_L060-137` (the only MARS request).
+6. **Small download** in `tmux` on a login node, outdir on scratch:
+   `./dcfe.sh download --start 20230830 --end 20230830 --area 61 21 59 25 --levels 60 137 --outdir /scratch/<project>/dcfe_test`.
+   The model-level request waits in the MARS queue (hours). Interrupt with Ctrl-C and run the same command again
+   to check that it re-attaches. Look at `<outdir>/logs/`.
+7. **Process the default route** (no Fortran): same options plus `process`. Expect 24 files `EA02523083000`..`23`
+   with 566 messages each (`grib_count`), and a log that says `ETADOT boundary: ground  pressure: lnsp`.
+8. **Other routes:** `--pressure sp` (needs its own single-levels download) and `--pressure spectral` (needs the
+   spectral LNSP download and `calc_etadot`; note the seconds per hour from the log, and the grid size).
+9. **Cron, optional:** `download --once` from cron on a login node, if the site allows it (see above).
+10. **Report back:** versions printed by `setup`, module list (`module list`), timings, anything that needed
+    changing in `sites/csc.sh`.
+
 ## Tests
 
 `./.venv/bin/python -m pytest tests` (no network needed; CDS is replaced by a fake client).
