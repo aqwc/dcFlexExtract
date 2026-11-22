@@ -8,9 +8,9 @@
 """Run logging. Every invocation of download/process/cleanup writes its own log file in <outdir>/logs/:
 
     <outdir>/logs/YYYYmmdd-HHMMSS_<command>.log   everything of that run (DEBUG detail, timestamps)
-    <outdir>/logs/commands.log                    one line per invocation: when, command, exact command line
+    <outdir>/logs/commands.log                    one comment line per invocation: when (date, weekday, time), command, exact command line
 
-The log starts with the command line that was used, the working directory, host, tool versions and the
+The log starts with two comment lines (# date weekday time, # the full command), then the command line that was used, the working directory, host, tool versions and the
 parsed arguments. Afterwards it records requests sent to CDS (with their bodies), job state changes, files
 saved (size, message count), and for post-processing the raw files indexed, the calc_etadot namelist and
 command line, its result and every output file. The console shows the INFO lines only.
@@ -70,8 +70,13 @@ def setup(outdir, cmd: str, argv: list[str], args: dict | None = None) -> Path:
     LOG.addHandler(ch)
 
     line = command_line(argv)
+    started = datetime.now()
+    when = f"{started:%Y-%m-%d %a %H:%M:%S}"          # date, weekday, time
+    # the first lines of every log are comments: when it was started and the full command, ready to copy
+    fh.stream.write(f"# {when}\n# {line}\n")
+    fh.stream.flush()
     with open(logdir / "commands.log", "a", encoding="utf-8") as f:
-        f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} [{cmd}] {line}\n")
+        f.write(f"# {when} [{cmd}] {line}\n")
 
     LOG.debug("command line : %s", line)
     LOG.debug("python -m form: python -m dcfe %s", shlex.join(argv))

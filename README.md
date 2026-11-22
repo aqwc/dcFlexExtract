@@ -93,13 +93,14 @@ A lock on the manifest stops a second copy from starting while one is still work
 
 Every `download`, `process` and `cleanup` run writes a log in `<outdir>/logs/`:
 
-* `YYYYmmdd-HHMMSS_<command>.log` – one file per run, with timestamps. It starts with the exact command line
+* `YYYYmmdd-HHMMSS_<command>.log` – one file per run, with timestamps. It starts with two comment lines: the
+  date, weekday and time, and the full command (`# bash ./dcfe.sh download ...`, ready to copy). Then the exact command line
   used (as typed to `dcfe.sh`), working directory, host, Python/ecCodes/CDS-client versions and all arguments.
   Then: every request sent to CDS (full body) and its job id, job state changes, retries/splits/errors, every
   file saved (path, bytes, message count) and CDS job deleted; for `process` the raw files indexed, which raw
   files each hour was built from, the `calc_etadot` namelist, command and result, and every output file
   (path, bytes, message count). The console shows only the short INFO lines.
-* `commands.log` – one line per invocation (time, command, command line), appended across runs.
+* `commands.log` – one comment line per invocation (`# date weekday time [command] bash ./dcfe.sh ...`), appended across runs.
 
 `plan` writes nothing. The CDS key is never logged.
 

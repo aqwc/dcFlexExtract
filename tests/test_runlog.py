@@ -33,14 +33,20 @@ def test_process_check_writes_log_and_command_history_in_outdir(tmp_path, monkey
     assert "EA02523083000: MISSING" in text
     cmds = (out / "logs" / "commands.log").read_text().splitlines()
     assert len(cmds) == 1 and "[process]" in cmds[0] and "--outdir" in cmds[0]
+    import re
+    assert re.match(r"# \d{4}-\d\d-\d\d (Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d\d:\d\d:\d\d \[process\] ", cmds[0])
     runlog.LOG.handlers.clear()
 
 
 def test_launcher_command_line_is_logged_verbatim(tmp_path, monkeypatch):
     monkeypatch.setenv("DCFE_CMDLINE", "./dcfe.sh process --start 20230830 --outdir 'my out'")
     runlog.setup(tmp_path, "process", ["process"])
-    assert "command line : ./dcfe.sh process --start 20230830 --outdir 'my out'" in \
-        next((tmp_path / "logs").glob("2*.log")).read_text()
+    text = next((tmp_path / "logs").glob("2*.log")).read_text()
+    assert "command line : ./dcfe.sh process --start 20230830 --outdir 'my out'" in text
+    first = text.splitlines()[:2]                          # comment lines: time and day, then the full command
+    import re
+    assert re.fullmatch(r"# \d{4}-\d\d-\d\d [A-Z][a-z]{2} \d\d:\d\d:\d\d", first[0])
+    assert first[1] == "# ./dcfe.sh process --start 20230830 --outdir 'my out'"
     runlog.LOG.handlers.clear()
 
 

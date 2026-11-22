@@ -12,7 +12,7 @@
 # dcFlexExtract launcher.   ./dcfe.sh setup [--no-fortran] | selftest | plan | download | process | cleanup   (-h for options)
 set -euo pipefail
 # the exact call is recorded in the run log (<outdir>/logs)
-DCFE_CMDLINE=$(printf '%q ' "$0" "$@"); export DCFE_CMDLINE
+DCFE_CMDLINE="bash $(printf '%q ' "$0" "$@")"; DCFE_CMDLINE=${DCFE_CMDLINE% }; export DCFE_CMDLINE
 ROOT=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 
 # --- site: DCFE_SITE=csc|local, otherwise guessed from the host name
