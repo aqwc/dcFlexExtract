@@ -364,3 +364,21 @@ def test_per_queue_limits_single_levels_parallel_mars_limited(tmp_path):
 def test_default_limits():
     from dcfe.download import DEFAULT_INFLIGHT
     assert DEFAULT_INFLIGHT == {"reanalysis-era5-complete": 2, "reanalysis-era5-single-levels": 3}
+
+
+def test_split_order_without_area_never_makes_tiles_and_without_days_never_learns_a_span(tmp_path):
+    cfg = mkcfg(tmp_path, start="20260105", end="20260106", pressure="spectral")
+    def beh(ds, body):                                       # a "size" rule on levels x days only
+        if ds != "reanalysis-era5-complete" or body["param"] == "152.128":
+            return None
+        a, _, b = body["levelist"].partition("/to/")
+        nlev = int(b) - int(a) + 1 if b else 1
+        d0, _, d1 = body["date"].partition("/to/")
+        return "too_large" if nlev * (1 if not d1 else 2) > 40 else None
+    dl = Downloader(cfg, FakeClient(beh), split_order=("levels",), **quiet(spans={"ML": 2}))
+    run(dl)
+    assert dl.summary().get(FAILED, 0) == 0
+    ml = [Request.from_dict(u["request"]) for k, u in dl.manifest.units.items() if "/ML_" in k and u["state"] == DONE]
+    assert ml and not any(r.tiled for r in ml) and all(r.ndays == 2 for r in ml)       # days stayed together
+    assert all(r.nlevels * 2 <= 40 for r in ml) and sum(r.nlevels for r in ml) == 78
+    assert "ML" not in dl.manifest.meta["max_days"]                                     # no day-span was learned

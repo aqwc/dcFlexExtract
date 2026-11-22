@@ -27,6 +27,9 @@ from .config import Config
 
 # the area is halved at most this often (1/8 of the domain) before the model levels are split
 MAX_AREA_SPLITS = 3
+# kinds of split, and the default order in which they are tried after CDS refused a request
+SPLIT_KINDS = ("days", "area", "levels", "variables", "hours")
+SPLIT_ORDER = SPLIT_KINDS
 
 # groups
 ML, LNSP, SP, SL, FLUX, STATIC = "ML", "LNSP", "SP", "SL", "FLUX", "STATIC"
@@ -189,39 +192,51 @@ class Request:
         }
 
     # ---- splitting after a "request too large" error --------------------------------------
-    def split(self) -> list["Request"]:
+    def split(self, order: tuple[str, ...] = None) -> list["Request"]:
         """Smaller units covering exactly the same data, tried only after CDS refused the larger one.
-        Order: fewer days (halving, down to one day); then the area (halving, at most MAX_AREA_SPLITS times,
-        i.e. down to 1/8 of the domain); then the model levels (halving); then variables; then hours; then
-        further area splits. Returns [] when nothing is left to divide. Parts are plain GRIB; day, level,
-        variable and hour parts are simply concatenated, tiles must be mosaicked back to the domain."""
+        `order` lists the kinds of split to try, first to last (default SPLIT_ORDER): days (halving, down to
+        one day), area (halving, at most MAX_AREA_SPLITS times = 1/8 of the domain), levels (halving),
+        variables, hours. When "area" is in the order, still smaller tiles are the very last resort.
+        A kind that is not listed is never used. Returns [] when nothing is left to divide.
+        Parts are plain GRIB; day, level, variable and hour parts are simply concatenated, tiles must be
+        mosaicked back to the domain."""
+        order = SPLIT_ORDER if order is None else tuple(order)
+        if bad := [o for o in order if o not in SPLIT_KINDS]:
+            raise ValueError(f"unknown split kind {bad}; choose from {SPLIT_KINDS}")
+
         def halves(seq):
             m = (len(seq) + 1) // 2
             return seq[:m], seq[m:]
 
         rep = lambda **kw: Request(**{**self.__dict__, **kw})
-        tiles = lambda: [rep(area=t, tiled=True, tile_depth=self.tile_depth + 1)
-                         for t in split_area(self.area, self.grid)]
-        if self.ndays > 1:                                   # fewer days per request first
-            k = (self.ndays + 1) // 2
-            return [rep(ndays=k), rep(day=self.day + timedelta(days=k), ndays=self.ndays - k)]
-        if self.tile_depth < MAX_AREA_SPLITS and self.group != STATIC and (parts := tiles()):
-            return parts
-        if self.group == ML and self.nlevels > 1:
-            a, b = self.levels
-            m = (a + b) // 2
-            lo = rep(levels=(a, m))                         # keeps LNSP, if any, together with the upper levels
-            hi = rep(levels=(m + 1, b), vars=self.ml_vars)
-            return [lo, hi]
-        if len(self.vars) > 1:
-            a, b = halves(self.vars)
-            return [rep(vars=a), rep(vars=b)]
-        if len(self.hours) > 1 and self.group != STATIC:
-            a, b = halves(self.hours)
-            return [rep(hours=a), rep(hours=b)]
-        if parts := tiles():
-            return parts
-        return []
+
+        def tiles():
+            return [rep(area=t, tiled=True, tile_depth=self.tile_depth + 1)
+                    for t in split_area(self.area, self.grid)]
+
+        def by(kind):
+            if kind == "days" and self.ndays > 1:
+                k = (self.ndays + 1) // 2
+                return [rep(ndays=k), rep(day=self.day + timedelta(days=k), ndays=self.ndays - k)]
+            if kind == "area" and self.tile_depth < MAX_AREA_SPLITS and self.group != STATIC:
+                return tiles()
+            if kind == "levels" and self.group == ML and self.nlevels > 1:
+                a, b = self.levels
+                m = (a + b) // 2
+                # the lower part keeps LNSP, if any (LNSP is on level 1; the level list is written out)
+                return [rep(levels=(a, m)), rep(levels=(m + 1, b), vars=self.ml_vars)]
+            if kind == "variables" and len(self.vars) > 1:
+                a, b = halves(self.vars)
+                return [rep(vars=a), rep(vars=b)]
+            if kind == "hours" and len(self.hours) > 1 and self.group != STATIC:
+                a, b = halves(self.hours)
+                return [rep(hours=a), rep(hours=b)]
+            return []
+
+        for kind in order:
+            if parts := by(kind):
+                return parts
+        return tiles() if "area" in order else []
 
 
 def split_area(area, grid):

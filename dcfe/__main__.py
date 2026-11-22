@@ -36,6 +36,16 @@ def _outdir_arg(p, what):
                    help=f"output directory: {what}; logs go to <outdir>/logs (default: out)")
 
 
+def _split_order(text):
+    from .requests import SPLIT_KINDS
+    order = tuple(x.strip().lower() for x in text.split(",") if x.strip())
+    bad = [x for x in order if x not in SPLIT_KINDS]
+    if bad or not order or len(set(order)) != len(order):
+        raise argparse.ArgumentTypeError(f"give each of {','.join(SPLIT_KINDS)} at most once, comma-separated "
+                                         f"(got {text!r})")
+    return order
+
+
 def _spans(text):
     return {k.strip().upper(): int(v) for k, v in (kv.split("=") for kv in text.split(",") if kv)}
 
@@ -59,6 +69,10 @@ def build_parser():
     d.add_argument("--poll", type=float, default=60, help="seconds between polls in loop mode")
     d.add_argument("--inflight-mars", type=int, default=2, help="open jobs in the MARS queue (model levels, LNSP)")
     d.add_argument("--inflight-sfc", type=int, default=3, help="open jobs for single-level data (not MARS)")
+    d.add_argument("--split-order", type=_split_order, default=None, metavar="days,area,levels,variables,hours",
+                   help="how to split a request that CDS refuses, first to last (default: days,area,levels,"
+                        "variables,hours). Kinds you leave out are never used. Area (tiles) needs mosaicking "
+                        "before process, which is not implemented yet: leave it out to keep every file whole-area")
     d.add_argument("--spans", default="", metavar="ML=7,LNSP=31",
                    help="days per request to try first, by group (ML LNSP SL FLUX); refused sizes are learned and halved")
 
@@ -149,7 +163,8 @@ def cmd_download(a):
     LOG.info("raw data: %s", cfg.rawdir)
     dl = Downloader(cfg, DatastoresClient(),
                     max_inflight={era5.DATASET_MARS: a.inflight_mars, era5.DATASET_SFC: a.inflight_sfc},
-                    poll_seconds=a.poll, spans=_spans(a.spans), log=LOG.info)
+                    poll_seconds=a.poll, spans=_spans(a.spans), log=LOG.info,
+                    **({"split_order": a.split_order} if a.split_order else {}))
     ok = (dl.step() and dl.summary().get("failed", 0) == 0) if a.once else dl.run()
     LOG.info("%s", dl.summary())
     return 0 if ok or a.once else 1

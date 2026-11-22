@@ -310,3 +310,34 @@ def test_sp_request_body():
     s = next(u for u in plan(cfg(pressure="sp")) if u.group == SP)
     assert s.dataset == era5.DATASET_SFC and s.cds_request()["variable"] == ["surface_pressure"]
     assert s.expected_messages == 24 * s.ndays
+
+
+def test_split_order_is_followed_and_unlisted_kinds_are_never_used():
+    u = next(u for u in _plan(cfg(end="20260108", pressure="spectral")) if u.group == ML)
+    # levels first, then days; no area, variables or hours
+    a, b = u.split(("levels", "days"))
+    assert a.ndays == b.ndays == u.ndays and a.area == u.area and a.vars == u.vars
+    assert a.levels[1] + 1 == b.levels[0]
+    one_level = u
+    while one_level.nlevels > 1:
+        one_level = one_level.split(("levels", "days"))[0]
+    d1, d2 = one_level.split(("levels", "days"))
+    assert d1.ndays + d2.ndays == u.ndays and d1.levels == d2.levels
+    leaf = one_level
+    while leaf.ndays > 1:
+        leaf = leaf.split(("levels", "days"))[0]
+    assert leaf.split(("levels", "days")) == []              # variables/hours/area were not allowed: nothing left
+    # "area" in the order also enables still smaller tiles at the very end
+    assert leaf.split(("days", "area"))
+    with pytest.raises(ValueError):
+        u.split(("days", "sideways"))
+    assert u.split() == u.split(("days", "area", "levels", "variables", "hours"))
+
+
+def test_cli_split_order_parsing():
+    import argparse
+    from dcfe.__main__ import _split_order
+    assert _split_order("days, levels") == ("days", "levels")
+    for bad in ("days,days", "weeks", ""):
+        with pytest.raises(argparse.ArgumentTypeError):
+            _split_order(bad)

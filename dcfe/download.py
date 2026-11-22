@@ -30,7 +30,7 @@ from . import client as C
 from . import era5
 from .config import Config
 from .gribcount import count_messages
-from .requests import Request, plan
+from .requests import SPLIT_ORDER, Request, plan
 
 # Open CDS jobs per queue. Single-level data does not use the MARS archive, so a few can run in
 # parallel; for MARS the user may run only one request at a time (the others wait in line).
@@ -76,6 +76,7 @@ class Downloader:
     max_attempts: int = 5
     poll_seconds: float = 60.0
     spans: Optional[dict] = None             # days per request to try first, by group (see requests.DEFAULT_SPANS)
+    split_order: tuple = SPLIT_ORDER         # kinds of split to try after a refusal, first to last
     log: Callable[[str], None] = print
     now: Callable[[], float] = time.time
     manifest: Optional[Manifest] = field(default=None, init=False)
@@ -135,7 +136,7 @@ class Downloader:
         """Split a pending unit locally (no request sent) while it is longer than the learned limit."""
         req = self._req(rp)
         lim = self.manifest.meta["max_days"].get(req.group)
-        if not lim or req.ndays <= lim:
+        if not lim or req.ndays <= lim or "days" not in self.split_order:
             return
         self._split(rp, f"above learned limit of {lim} days", learn=False)
         for kid in self.manifest.units[rp].get("children", []):
@@ -144,9 +145,9 @@ class Downloader:
 
     def _split(self, rp: str, reason: str, learn: bool = True):
         req = self._req(rp)
-        if learn and req.ndays > 1:
+        if learn and req.ndays > 1 and "days" in self.split_order:
             self._learn_span(req)
-        kids = req.split()
+        kids = req.split(self.split_order)
         u = self.manifest.units[rp]
         if not kids:
             u.update(state=FAILED, error=f"too large and cannot be split further: {reason}")
@@ -241,7 +242,7 @@ class Downloader:
                 continue
             req = self._req(rp)
             lim = m.meta["max_days"].get(req.group)
-            if lim and req.ndays > lim:
+            if lim and req.ndays > lim and "days" in self.split_order:
                 self._presplit(rp)
                 continue
             if inflight.get(req.queue, 0) >= self._limit(req.queue):

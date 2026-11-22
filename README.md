@@ -116,6 +116,9 @@ Every `download`, `process` and `cleanup` run writes a log in `<outdir>/logs/`:
   **Tiles are not**: they are sub-areas of the same fields and must be mosaicked to the full grid, which `process`
   cannot do yet; it stops with a clear message if it finds tiled data (`--pressure`, `--levels` and the area
   decide the size of a request, so a refusal at 1/8 of the area is unlikely for ordinary domains).
+  `download --split-order days,levels,variables,hours` sets the order yourself: kinds you leave out are never
+  used (leave out `area` and no file is ever a tile; a request that is still refused then fails with a clear
+  message). Valid kinds: `days`, `area`, `levels`, `variables`, `hours`; default `days,area,levels,variables,hours`.
 * Queues: MARS (`reanalysis-era5-complete`: model levels, LNSP) allows one running request per user, so
   `--inflight-mars` defaults to 2; single-level data is not MARS and runs `--inflight-sfc` (3) jobs in
   parallel. Each finished CDS job is deleted after a verified download. `./dcfe.sh cleanup` lists
