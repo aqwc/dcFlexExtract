@@ -36,12 +36,12 @@ def test_config_validation():
         cfg(levels=(0, 137))
 
 
-def test_level_blocks_clipped_and_aligned():
-    assert level_blocks(1, 137) == [(1, 59), (60, 137)]
-    assert level_blocks(60, 137) == [(60, 137)]          # default: one block
-    assert level_blocks(40, 100) == [(40, 59), (60, 100)]
-    # extending 60-137 to 1-137 only adds a block; the existing block is unchanged
-    assert set(level_blocks(60, 137)) < set(level_blocks(1, 137))
+def test_levels_are_always_one_block():
+    assert level_blocks(1, 137) == [(1, 137)]
+    assert level_blocks(60, 137) == [(60, 137)]
+    assert level_blocks(1, 60) == [(1, 60)]
+    ml = [u for u in plan(cfg(levels=(1, 137))) if u.group == ML]
+    assert {u.levels for u in ml} == {(1, 137)}
 
 
 def test_plan_days_and_groups():
@@ -52,8 +52,8 @@ def test_plan_days_and_groups():
     assert [u.day.day for u in by(LNSP)] == [5, 6, 7]
     # fluxes padded by one day on both sides
     assert [u.day.day for u in by(FLUX)] == [4, 5, 6, 7, 8]
-    assert len(by(ML)) == 3 * 1          # default levels 60-137: one block per day
-    assert len([u for u in plan(cfg(levels=(1, 137))) if u.group == ML]) == 3 * 2
+    assert len(by(ML)) == 3 * 1          # one model-level request per day, whatever the levels
+    assert len([u for u in plan(cfg(levels=(1, 137))) if u.group == ML]) == 3 * 1
 
 
 def test_relpaths_unique_deterministic_and_domain_scoped():
@@ -249,14 +249,11 @@ def test_gridded_lnsp_is_merged_into_the_first_model_level_request():
     assert "all-LNSP" in ml[0].relpath
 
 
-def test_lnsp_with_levels_from_1_goes_to_the_first_block_only_and_without_extra_level():
+def test_lnsp_with_levels_from_1_needs_no_extra_level_and_no_split_of_levels():
     ml = [u for u in plan(cfg(pressure="lnsp", levels=(1, 137))) if u.group == ML]
-    first = [u for u in ml if u.levels == (1, 59)]
-    other = [u for u in ml if u.levels == (60, 137)]
-    assert all(u.has_lnsp for u in first) and not any(u.has_lnsp for u in other)
-    assert first[0].cds_request()["levelist"] == "1/to/59"
-    assert first[0].expected_messages == (7 * 59 + 1) * 24 * first[0].ndays
-    assert other[0].expected_messages == 7 * 78 * 24 * other[0].ndays
+    assert {u.levels for u in ml} == {(1, 137)} and all(u.has_lnsp for u in ml)
+    assert ml[0].cds_request()["levelist"] == "1/to/137"            # level 1 is in the range already
+    assert ml[0].expected_messages == (7 * 137 + 1) * 24 * ml[0].ndays
 
 
 def test_split_of_a_unit_with_lnsp_covers_exactly_the_same_messages():

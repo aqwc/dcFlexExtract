@@ -124,9 +124,12 @@ the 06/18 forecasts incl. the day before/after) and the 4 static fields (SDOR CV
 
 ### Adding upper levels later
 
-Re-run `download` with e.g. `--levels 1 137`: only the missing block (levels 1–59) is requested.
-Then run `process` with `--levels 1 137` into a **new** `--outdir`; existing output files are skipped, not
-overwritten, so reusing the old outdir would leave the old 60–137 files in place.
+Each run requests its levels as **one** model-level request (MARS waits are per request, so fewer, larger requests
+are faster; levels are never split). To add levels to data you already have, download only the new ones into the
+same raw directory, e.g. after `--levels 60 137`: `download ... --levels 1 59 --rawdir <same>` (with
+`--pressure spectral`/`sp` this also repeats the pressure request; with `lnsp` it carries gridded LNSP again,
+harmless). `process` finds data by content, so `process ... --levels 1 137` then uses both pieces. Write the result
+to a **new** `--outdir`: existing output files are skipped, not overwritten.
 
 ## Output
 

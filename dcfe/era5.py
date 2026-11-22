@@ -15,10 +15,9 @@ DATASET_MARS = "reanalysis-era5-complete"        # model levels, tape-backed MAR
 DATASET_SFC = "reanalysis-era5-single-levels"     # surface fields, separate (disk) service
 
 MAX_LEVEL = 137
-# Canonical level blocks (level 137 is the lowest model level, at the surface). Levels are never
-# split further after a "too large" error (tiles / variables / hours are split instead). Blocks are
-# clipped to the user's range: the default 60-137 is one block; adding 1-59 later adds one block.
-LEVEL_BLOCKS = ((1, 59), (60, 137))
+# Level 137 is the lowest model level, at the surface. The requested levels go into ONE request (MARS waits
+# are per request, so fewer, larger requests are faster). Levels are never split, not even after a "too
+# large" error (days / variables / hours / tiles are split instead).
 DEFAULT_LEVELS = (60, 137)
 
 HOURS = tuple(range(24))

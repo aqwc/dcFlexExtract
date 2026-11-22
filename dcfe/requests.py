@@ -231,13 +231,10 @@ def split_area(area, grid):
 
 
 def level_blocks(first: int, last: int) -> list[tuple[int, int]]:
-    """Canonical blocks clipped to the wanted range."""
-    out = []
-    for a, b in era5.LEVEL_BLOCKS:
-        lo, hi = max(a, first), min(b, last)
-        if lo <= hi:
-            out.append((lo, hi))
-    return out
+    """The model levels of a run as one block: MARS requests are tried as large as possible. To add levels
+    to an existing download later, download just those levels (e.g. --levels 1 59) into the same raw directory;
+    `process` finds data by content, so the pieces fit together."""
+    return [(first, last)]
 
 
 def _daterange(start: date, end: date):
