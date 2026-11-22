@@ -109,7 +109,7 @@ Every `download`, `process` and `cleanup` run writes a log in `<outdir>/logs/`:
   their content, so a restart re-uses finished files and re-attaches to jobs still queued at CDS (job ids
   are kept in `raw/<domain>/manifest.json`). A file is only accepted if its GRIB message count is right.
 * **Always the largest request first.** The whole period goes into one MARS request (single-level requests: one
-  per month), all chosen levels, the whole area. Only if CDS refuses it is it split, in this order: days
+  per calendar month the run touches, containing only the days of that month), all chosen levels, the whole area. Only if CDS refuses it is it split, in this order: days
   (halving, down to single days) → area (halving, three times, i.e. down to 1/8 of the domain) → model levels
   (halving) → variables → hours → still smaller tiles. The largest accepted number of days per group is learned
   and reused. Day, level, variable and hour parts are plain GRIB and are simply concatenated by `process`.
