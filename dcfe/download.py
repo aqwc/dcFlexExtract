@@ -87,6 +87,8 @@ class Downloader:
     log: Callable[[str], None] = print
     now: Callable[[], float] = time.time
     manifest: Optional[Manifest] = field(default=None, init=False)
+    events: int = field(default=0, init=False)        # submits, splits, fetches, failures so far
+    _polled: dict = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self):
         self.root = Path(self.cfg.rawdir)
@@ -160,6 +162,7 @@ class Downloader:
             u.update(state=FAILED, error=f"too large and cannot be split further: {reason}")
             self.log(f"FAILED  {rp}: {u['error']}")
             return
+        self.events += 1
         u.update(state=SPLIT, children=[k.relpath for k in kids], job_id=None)
         if learn:
             u["refused"] = True                    # CDS itself refused this one (not just split locally)
@@ -248,6 +251,7 @@ class Downloader:
         os.replace(part, final)
         job_id = u["job_id"]
         u.update(state=DONE, job_id=None)
+        self.events += 1
         self.log(f"DONE    {rp} ({req.expected_messages} messages)")
         _detail("SAVED   %s: %d bytes, %d messages, from CDS job %s", final, final.stat().st_size, n, job_id)
         # the data is safely on disk and verified: remove the finished job from the CDS account so
@@ -266,6 +270,9 @@ class Downloader:
         for rp, u in list(m.units.items()):
             if u["state"] != SUBMITTED:
                 continue
+            if self.now() - self._polled.get(rp, float("-inf")) < self.poll_seconds:
+                continue                              # asked about this job a moment ago: do not hammer CDS
+            self._polled[rp] = self.now()
             try:
                 state, msg = self.client.poll(u["job_id"])
                 if state == C.DONE:
@@ -298,6 +305,7 @@ class Downloader:
             try:
                 u["job_id"] = self.client.submit(req.dataset, req.cds_request())
                 u.update(state=SUBMITTED, submitted_at=self.now())
+                self.events += 1
                 inflight[req.queue] = inflight.get(req.queue, 0) + 1
                 self.log(f"SUBMIT  {rp} job {u['job_id']}")
                 _detail("REQUEST %s -> %s: %s", rp, req.dataset, json.dumps(req.cds_request(), sort_keys=True))
@@ -309,11 +317,24 @@ class Downloader:
         m.save()
         return self.finished()
 
+    def settle(self, max_passes: int = 1000) -> bool:
+        """Repeat step() without waiting for as long as something happens (a refusal is split and the parts
+        are submitted at once, finished jobs are fetched and the next ones submitted). Waiting is only
+        needed when nothing changed, and then it is up to the caller. Returns True when all is done/failed."""
+        for _ in range(max_passes):
+            before = self.events
+            if self.step():
+                return True
+            if self.events == before:
+                return False
+        return False
+
     def run(self):
-        """Loop until everything is done or failed. Safe to interrupt (Ctrl-C) and restart."""
+        """Loop until everything is done or failed. Safe to interrupt (Ctrl-C) and restart.
+        Sleeps `poll_seconds` between passes only when nothing changed; queued jobs are polled at most that often."""
         try:
             last = None
-            while not self.step():
+            while not self.settle():
                 if self.summary() != last:               # progress line only when something changed
                     last = self.summary()
                     self.log(f"... {last}")

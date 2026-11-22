@@ -77,7 +77,9 @@ _HELP = (
     ("DOWNLOAD OPTIONS", None, [
         ("--once", "do one step (collect finished jobs, submit new ones) and exit, for cron or short jobs. "
          "Without it: loop until everything is done."),
-        ("--poll SECONDS", "wait between polls in loop mode (default 60)"),
+        ("--poll SECONDS", "wait when nothing changed, and the shortest time between two status checks of the same "
+         "queued CDS job (default 60). A refused request is split and its parts submitted at once, without waiting, "
+         "so a short --poll is not needed to speed that up."),
         ("--inflight-mars N", "open MARS jobs, i.e. model levels (default 2). MARS runs one request per user at a "
          "time, the others wait in the queue."),
         ("--inflight-sfc N", "open single-levels jobs (default 3)"),
@@ -159,7 +161,9 @@ def build_parser():
     _outdir_arg(d, "raw data goes to <outdir>/raw unless --rawdir is given")
     d.add_argument("--rawdir", default=None, help="where raw GRIB files are stored (default: <outdir>/raw)")
     d.add_argument("--once", action="store_true", help="advance state once and exit (cron / short jobs)")
-    d.add_argument("--poll", type=float, default=60, help="seconds between polls in loop mode")
+    d.add_argument("--poll", type=float, default=60,
+                   help="seconds to wait when nothing changed, and the shortest time between two status checks of a "
+                        "queued CDS job (default 60). Refusals are split and retried at once, not after this wait")
     d.add_argument("--inflight-mars", type=int, default=2, help="open jobs in the MARS queue (model levels, LNSP)")
     d.add_argument("--inflight-sfc", type=int, default=3, help="open jobs for single-level data (not MARS)")
     d.add_argument("--split-order", type=_split_order, default=None, metavar=default_order,
@@ -267,7 +271,7 @@ def cmd_download(a):
                     max_inflight={era5.DATASET_MARS: a.inflight_mars, era5.DATASET_SFC: a.inflight_sfc},
                     poll_seconds=a.poll, spans=_spans(a.spans), log=LOG.info,
                     **({"split_order": a.split_order} if a.split_order else {}))
-    ok = (dl.step() and dl.summary().get("failed", 0) == 0) if a.once else dl.run()
+    ok = (dl.settle() and dl.summary().get("failed", 0) == 0) if a.once else dl.run()
     LOG.info("%s", dl.summary())
     return 0 if ok or a.once else 1
 

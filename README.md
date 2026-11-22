@@ -29,7 +29,7 @@ Only ERA5 is supported. You choose the dates, the area, the grid and the model l
 | option | meaning |
 |---|---|
 | `--once` | one step (collect finished jobs, submit new ones), then exit; for cron or short jobs. Without it the program loops until everything is done |
-| `--poll SECONDS` | wait between polls in loop mode (default 60) |
+| `--poll SECONDS` | wait when nothing changed, and the shortest time between two status checks of the same queued CDS job (default 60). A refused request is split and its parts are submitted at once, without waiting, so a short `--poll` is not needed to speed that up (and a very short one means many status calls to CDS) |
 | `--inflight-mars N` | open MARS jobs, i.e. model levels (default 2); MARS runs one request per user at a time, the others wait |
 | `--inflight-sfc N` | open single-levels jobs (default 3) |
 | `--split-order LIST` | how a request that CDS refuses is made smaller, first to last: any of `days`, `variables`, `area`, `levels`, `hours` (default in that order); kinds left out are never used. See *What the downloader does* |
@@ -94,7 +94,7 @@ A="--start 20230830 --end 20230902 --area 61 21 59 25 --grid 0.25 --levels 60 13
 ```
 
 Run `download` in `tmux`/`screen` on a login node or laptop: CDS queues can take days and a Slurm job
-cannot cover them. The loop only sleeps and polls. `--once` advances one step and exits (cron or a short
+cannot cover them. The loop only sleeps and polls. `--once` does everything that can be done now (including the whole split ladder after a refusal) and exits (cron or a short
 job). Use the same `--outdir` for `download` and `process`: raw data is kept in `<outdir>/raw` (override with
 `--rawdir`), the hourly files go to `<outdir>`. On HPC point `--outdir` to scratch.
 

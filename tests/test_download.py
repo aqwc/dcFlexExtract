@@ -414,3 +414,37 @@ def test_a_request_is_never_rebuilt_from_leftovers_when_it_was_already_refused(t
     assert got == ["CVH", "FSR", "SDOR"]                                   # everything but the refused CVL, each once
     failed = [k for k, u in dl.manifest.units.items() if u["state"] == FAILED]
     assert len(failed) == 1 and "STATIC_CVL" in failed[0]
+
+
+def test_a_refusal_chain_is_resolved_in_one_settle_without_waiting(tmp_path):
+    """the parts of a split are submitted at once; nothing sleeps (the test would hang with a 1 h poll if it did)"""
+    asked = []
+
+    def beh(ds, b):
+        if ds == "reanalysis-era5-complete" and b["param"] != "152.128":
+            asked.append(len(b["param"].split("/")))
+            return "too_large" if asked[-1] > 4 else None
+    fc = FakeClient(beh, polls_until_done=1)
+    dl = Downloader(mkcfg(tmp_path, pressure="spectral"), fc, split_order=("variables",), poll_seconds=3600, **quiet())
+    dl.settle()
+    assert asked[:3] == [7, 6, 5] and sorted(asked[3:]) == [3, 4]      # the whole ladder in one call
+    # every submit happened in that one call; only the (instant) fake jobs remained to be polled and fetched
+    assert len(fc.submitted) >= 2
+
+
+def test_queued_jobs_are_polled_no_more_often_than_poll_seconds(tmp_path):
+    t = [0.0]
+    fc = FakeClient(polls_until_done=10 ** 9)                       # stays queued forever
+    cfg = mkcfg(tmp_path)
+    dl = Downloader(cfg, fc, poll_seconds=60, log=lambda m: None, now=lambda: t[0], spans=ONE_DAY)
+    dl.settle()                                                      # submits the first jobs
+    n_jobs = sum(1 for u in dl.manifest.units.values() if u["state"] == SUBMITTED)
+    assert n_jobs > 0
+    total = lambda: sum(j["polls"] for j in fc.jobs.values())
+    for _ in range(50):                                              # many passes within the same minute
+        t[0] += 0.5
+        dl.settle()
+    assert total() <= n_jobs                                         # each job asked about once, not 50 times
+    t[0] += 61
+    dl.settle()
+    assert total() >= 2 * n_jobs - 1 or total() > n_jobs             # a minute later they are asked again
