@@ -11,7 +11,7 @@
 """Pure request builder: Config -> list of download units. No I/O, no network.
 
 A *unit* (Request) is the smallest thing that is downloaded, stored and skipped on restart:
-one day x group x variable subset x level block x set of hours. Its file name is a deterministic
+a span of days x group x variable subset x level range x set of hours x (tile of the) area; by default the largest unit CDS accepts. Its file name is a deterministic
 function of its content, so a restarted run finds what was already downloaded. If CDS refuses a
 unit (cost limit), `Request.split()` gives smaller units; because GRIB files can simply be
 concatenated, the split is invisible to post-processing.
@@ -24,6 +24,9 @@ from typing import Optional
 
 from . import era5
 from .config import Config
+
+# the area is halved at most this often (1/8 of the domain) before the model levels are split
+MAX_AREA_SPLITS = 3
 
 # groups
 ML, LNSP, SP, SL, FLUX, STATIC = "ML", "LNSP", "SP", "SL", "FLUX", "STATIC"
@@ -69,6 +72,7 @@ class Request:
     grid: float
     tiled: bool = False                    # True when `area` is a tile of the domain
     ndays: int = 1                         # consecutive days covered, starting at `day`
+    tile_depth: int = 0                    # how many times the domain was halved to make this tile
 
     # ---- (de)serialisation, used by the download manifest ------------------------------------
     def to_dict(self) -> dict:
@@ -81,7 +85,7 @@ class Request:
         return cls(group=d["group"], day=date.fromisoformat(d["day"]), vars=tuple(d["vars"]),
                    hours=tuple(d["hours"]), levels=tuple(d["levels"]) if d["levels"] else None,
                    domain=d["domain"], area=tuple(d["area"]), grid=d["grid"], tiled=d["tiled"],
-                   ndays=d.get("ndays", 1))
+                   ndays=d.get("ndays", 1), tile_depth=d.get("tile_depth", 0))
 
     # ---- identity -------------------------------------------------------------------------
     @property
@@ -186,27 +190,37 @@ class Request:
 
     # ---- splitting after a "request too large" error --------------------------------------
     def split(self) -> list["Request"]:
-        """Smaller units covering exactly the same data. Order: fewer days, then variables, then hours,
-        then geographic tiles. Levels are never split. Returns [] when nothing is left to divide.
-        Parts are plain GRIB; hours/variables parts are simply concatenated, tiles must be
-        mosaicked back to the domain by the post-processor."""
+        """Smaller units covering exactly the same data, tried only after CDS refused the larger one.
+        Order: fewer days (halving, down to one day); then the area (halving, at most MAX_AREA_SPLITS times,
+        i.e. down to 1/8 of the domain); then the model levels (halving); then variables; then hours; then
+        further area splits. Returns [] when nothing is left to divide. Parts are plain GRIB; day, level,
+        variable and hour parts are simply concatenated, tiles must be mosaicked back to the domain."""
         def halves(seq):
             m = (len(seq) + 1) // 2
             return seq[:m], seq[m:]
 
         rep = lambda **kw: Request(**{**self.__dict__, **kw})
+        tiles = lambda: [rep(area=t, tiled=True, tile_depth=self.tile_depth + 1)
+                         for t in split_area(self.area, self.grid)]
         if self.ndays > 1:                                   # fewer days per request first
             k = (self.ndays + 1) // 2
             return [rep(ndays=k), rep(day=self.day + timedelta(days=k), ndays=self.ndays - k)]
+        if self.tile_depth < MAX_AREA_SPLITS and self.group != STATIC and (parts := tiles()):
+            return parts
+        if self.group == ML and self.nlevels > 1:
+            a, b = self.levels
+            m = (a + b) // 2
+            lo = rep(levels=(a, m))                         # keeps LNSP, if any, together with the upper levels
+            hi = rep(levels=(m + 1, b), vars=self.ml_vars)
+            return [lo, hi]
         if len(self.vars) > 1:
             a, b = halves(self.vars)
             return [rep(vars=a), rep(vars=b)]
         if len(self.hours) > 1 and self.group != STATIC:
             a, b = halves(self.hours)
             return [rep(hours=a), rep(hours=b)]
-        tiles = split_area(self.area, self.grid)
-        if tiles:
-            return [rep(area=t, tiled=True) for t in tiles]
+        if parts := tiles():
+            return parts
         return []
 
 
@@ -246,7 +260,8 @@ def _daterange(start: date, end: date):
 
 # Days per request to *try* first (CDS size limits are not documented; the downloader learns the
 # largest accepted size and shrinks from there). Single-level groups never cross a month boundary.
-DEFAULT_SPANS = {ML: 7, LNSP: 31, SP: 31, SL: 31, FLUX: 31}
+ALL_DAYS = 10 ** 6            # "the whole period in one request"
+DEFAULT_SPANS = {ML: ALL_DAYS, LNSP: ALL_DAYS, SP: 31, SL: 31, FLUX: 31}
 ONE_DAY = {ML: 1, LNSP: 1, SP: 1, SL: 1, FLUX: 1}
 
 

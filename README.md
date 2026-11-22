@@ -108,8 +108,14 @@ Every `download`, `process` and `cleanup` run writes a log in `<outdir>/logs/`:
 * One unit = a few days × one group (model levels, LNSP, surface, fluxes, static). Files are named after
   their content, so a restart re-uses finished files and re-attaches to jobs still queued at CDS (job ids
   are kept in `raw/<domain>/manifest.json`). A file is only accepted if its GRIB message count is right.
-* Too large for CDS? The unit is split: fewer days → variables → hours → geographic tiles. **Levels are
-  never split.** The largest accepted size per group is learned and reused.
+* **Always the largest request first.** The whole period goes into one MARS request (single-level requests: one
+  per month), all chosen levels, the whole area. Only if CDS refuses it is it split, in this order: days
+  (halving, down to single days) → area (halving, three times, i.e. down to 1/8 of the domain) → model levels
+  (halving) → variables → hours → still smaller tiles. The largest accepted number of days per group is learned
+  and reused. Day, level, variable and hour parts are plain GRIB and are simply concatenated by `process`.
+  **Tiles are not**: they are sub-areas of the same fields and must be mosaicked to the full grid, which `process`
+  cannot do yet; it stops with a clear message if it finds tiled data (`--pressure`, `--levels` and the area
+  decide the size of a request, so a refusal at 1/8 of the area is unlikely for ordinary domains).
 * Queues: MARS (`reanalysis-era5-complete`: model levels, LNSP) allows one running request per user, so
   `--inflight-mars` defaults to 2; single-level data is not MARS and runs `--inflight-sfc` (3) jobs in
   parallel. Each finished CDS job is deleted after a verified download. `./dcfe.sh cleanup` lists

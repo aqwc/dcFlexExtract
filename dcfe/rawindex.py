@@ -47,6 +47,15 @@ class RawIndex:
     def from_dir(cls, rawdir) -> "RawIndex":
         return cls(Path(rawdir).rglob("*.grb"))
 
+    def grid_sizes(self) -> dict[int, int]:
+        """number of values -> how many gridded (non-spectral) messages have that size; a single entry unless
+        the raw data holds tiles of the domain or data of another grid"""
+        out: dict[int, int] = {}
+        for d in (self.flux, self.sfc, self.ml, self.glnsp, self.sp):
+            for r in d.values():
+                out[r.nvalues] = out.get(r.nvalues, 0) + 1
+        return out
+
     def _add(self, r):
         pid = r.param_id
         if pid in _FLUX_IDS and r.step_type == "accum":

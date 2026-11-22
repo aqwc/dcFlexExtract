@@ -99,6 +99,13 @@ def cmd_process(a):
         LOG.debug("raw file: %s (%d bytes)", p, p.stat().st_size)
     LOG.debug("index: %d flux, %d surface, %d static, %d LNSP, %d model-level messages",
               len(ix.flux), len(ix.sfc), len(ix.static), len(ix.lnsp), len(ix.ml))
+    from .process import expected_grid_size
+    sizes, want = ix.grid_sizes(), expected_grid_size(cfg)
+    if sizes and set(sizes) != {want}:
+        LOG.error("raw data does not match the domain: %d values per field expected, found %s. Tiles of the domain "
+                  "(CDS refused the larger request and the download was split by area) cannot be assembled by "
+                  "process yet, or the data is for another area or grid.", want, sizes)
+        return 2
     out = Path(cfg.outdir)
     out.mkdir(parents=True, exist_ok=True)
     scratch = Path(a.scratch) if a.scratch else out / ".scratch"

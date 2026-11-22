@@ -49,3 +49,22 @@ def test_missing_reports_the_pressure_source_that_was_chosen():
     ix.sp[T] = object()        # only the chosen source counts
     cfg = Config.make("20230830", "20230830", (61, 21, 59, 25), 0.25, pressure="lnsp")
     assert any("gridded" in m for m in missing(ix, cfg, T))
+
+
+def test_grid_size_check_sees_tiles_and_foreign_grids(tmp_path):
+    import numpy as np
+    import eccodes
+    from dcfe.process import expected_grid_size
+    from dcfe.rawindex import RawIndex
+    cfg = Config.make("20230830", "20230830", (61, 21, 59, 25), 0.25)
+    assert expected_grid_size(cfg) == 17 * 9
+    g = eccodes.codes_grib_new_from_samples("regular_ll_sfc_grib1")
+    eccodes.codes_set(g, "paramId", 167)
+    eccodes.codes_set(g, "dataDate", 20230830)
+    eccodes.codes_set(g, "dataTime", 0)
+    n = eccodes.codes_get(g, "numberOfDataPoints")
+    eccodes.codes_set_values(g, np.zeros(n))
+    (tmp_path / "a.grb").write_bytes(eccodes.codes_get_message(g))
+    eccodes.codes_release(g)
+    sizes = RawIndex.from_dir(tmp_path).grid_sizes()
+    assert sizes == {n: 1} and n != expected_grid_size(cfg)       # a sample grid is not the domain: process refuses

@@ -57,6 +57,14 @@ def out_name(cfg: Config, T: datetime) -> str:
     return f"{prefix_for(cfg.grid)}{T:%y%m%d%H}"
 
 
+def expected_grid_size(cfg: Config) -> int:
+    """number of grid points of the domain"""
+    west, east = cfg.west, cfg.east
+    if east < west:
+        east += 360
+    return (int(round((east - west) / cfg.grid)) + 1) * (int(round((cfg.north - cfg.south) / cfg.grid)) + 1)
+
+
 def namelist(cfg: Config, mnauf: int) -> str:
     """fort.4 for calc_etadot, ERA5 case: ETADOT from MARS (meta=1), regular lat-lon, no omega."""
     west, east = cfg.west, cfg.east

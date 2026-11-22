@@ -179,24 +179,32 @@ def test_second_downloader_on_same_domain_is_refused(tmp_path):
         Downloader(cfg, FakeClient(), **quiet())
 
 
-def test_too_large_splits_by_variable_hours_then_tiles(tmp_path):
-    def beh(ds, body):
-        if ds == "reanalysis-era5-complete" and body["param"] != "152.128":
-            nvars = len(body["param"].split("/"))
-            return "too_large" if nvars > 2 or len(body["time"].split("/")) > 6 else None
-    cfg, fc = mkcfg(tmp_path), FakeClient(beh)
+def test_too_large_is_split_by_days_area_then_levels_and_covers_everything_once(tmp_path):
+    def cells(body):
+        n, w, s_, e = (float(x) for x in body["area"].split("/"))
+        return int(round((n - s_) / 0.25) + 1) * int(round((e - w) / 0.25) + 1)
+
+    def size(body):                                        # CDS-like cost: number of values requested
+        d0, _, d1 = body["date"].partition("/to/")
+        ndays = 1 if not d1 else int(d1[6:]) - int(d0[6:]) + 1
+        a, _, b = body["levelist"].partition("/to/")
+        nlev = int(b) - int(a) + 1 if b else len(body["levelist"].split("/"))
+        return len(body["param"].split("/")) * nlev * len(body["time"].split("/")) * ndays * cells(body)
+
+    beh = lambda ds, body: "too_large" if ds == "reanalysis-era5-complete" and size(body) > 150_000 else None
+    cfg, fc = mkcfg(tmp_path, pressure="spectral"), FakeClient(beh)
     dl = Downloader(cfg, fc, **quiet())
     run(dl)
     assert dl.summary().get(FAILED, 0) == 0
-    split_ml = [k for k, u in dl.manifest.units.items() if u["state"] == SPLIT and "/ML_" in k]
-    assert split_ml
-    # all ML data present exactly once: total messages of done ML leaves == original
     orig = next(r for r in plan(cfg) if r.group == "ML")
-    def needed(r):          # level 1 of the model-level variables is only an extra that rides along with LNSP
-        return (len(r.ml_vars) * r.nlevels + r.has_lnsp) * len(r.hours) * r.ndays
-    got = sum(needed(Request.from_dict(u["request"]))
-              for k, u in dl.manifest.units.items() if "/ML_" in k and u["state"] == DONE)
-    assert got == needed(orig)
+    leaves = [Request.from_dict(u["request"]) for k, u in dl.manifest.units.items()
+              if "/ML_" in k and u["state"] == DONE]
+    assert all(l.tiled for l in leaves) and max(l.tile_depth for l in leaves) == 3      # 1/8 of the area ...
+    assert any(l.nlevels < orig.nlevels for l in leaves)                                 # ... then the levels
+    assert all(len(l.vars) == len(orig.vars) and len(l.hours) == 24 for l in leaves)    # variables/hours untouched
+    # every (grid point, level) exactly once: the tiles partition the area, the level parts partition the levels
+    pts = lambda r: int(round((r.area[0] - r.area[2]) / 0.25) + 1) * int(round((r.area[3] - r.area[1]) / 0.25) + 1)
+    assert sum(pts(l) * l.nlevels for l in leaves) == pts(orig) * orig.nlevels
     assert not (tmp_path / "raw" / orig.relpath).exists()      # parent never downloaded as one file
 
 

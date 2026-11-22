@@ -11,7 +11,7 @@ import pytest
 
 from dcfe import era5
 from dcfe.config import Config
-from dcfe.requests import DEFAULT_SPANS, FLUX, LNSP, ML, ONE_DAY, SL, STATIC, level_blocks
+from dcfe.requests import DEFAULT_SPANS, FLUX, LNSP, MAX_AREA_SPLITS, ML, ONE_DAY, SL, STATIC, Request, level_blocks
 from dcfe.requests import plan as _plan
 
 
@@ -106,10 +106,14 @@ def test_expected_messages_match_reference_file():
     assert extra == 6
 
 
+def _no_more_tiles(u):
+    return Request(**{**u.__dict__, "tile_depth": MAX_AREA_SPLITS})
+
+
 @pytest.mark.parametrize("group", [ML, SL, FLUX, LNSP])
-def test_variable_and_hour_splits_cover_exactly_and_keep_levels(group):
-    u = next(u for u in plan(cfg()) if u.group == group)
-    # follow only the variable/hour part of the ladder (tiles are tested separately)
+def test_level_variable_and_hour_splits_cover_exactly(group):
+    u = _no_more_tiles(next(u for u in plan(cfg()) if u.group == group))
+    # follow the ladder past days, levels, variables and hours (tiles are tested separately)
     stack, leaves = [u], []
     while stack:
         r = stack.pop()
@@ -119,9 +123,9 @@ def test_variable_and_hour_splits_cover_exactly_and_keep_levels(group):
         else:
             leaves.append(r)
     assert len({x.relpath for x in leaves}) == len(leaves)
-    assert all(x.levels == u.levels and x.area == u.area for x in leaves)
+    assert all(x.area == u.area for x in leaves)
     assert sum(x.expected_messages for x in leaves) == u.expected_messages
-    assert all(len(x.vars) == 1 and len(x.hours) == 1 for x in leaves)
+    assert all(len(x.vars) == 1 and len(x.hours) == 1 and x.nlevels == 1 for x in leaves)
 
 
 @pytest.mark.parametrize("area,grid", [((61, 21, 59, 25), 0.25), ((60.5, -3.5, 50, 4.5), 0.5),
@@ -153,20 +157,47 @@ def test_tiles_cover_domain_exactly_without_overlap(area, grid):
     assert union == points(area)
 
 
-def test_split_order_variables_then_hours_then_tiles():
-    u = next(u for u in plan(cfg()) if u.group == ML)
-    a, b = u.split()
-    assert a.hours == u.hours and not a.tiled and len(a.vars) + len(b.vars) == len(u.vars)
-    single = a
-    while len(single.vars) > 1:
+def test_split_order_days_then_area_then_levels_then_variables_then_hours():
+    """what CDS refuses is retried smaller in this order: days (halving), area (3 halvings = 1/8), levels,
+    variables, hours"""
+    u = next(u for u in _plan(cfg(end="20260108")) if u.group == ML)        # 4 days in one request
+    assert u.ndays == 4 and u.tile_depth == 0
+    a, b = u.split()                                                       # days first
+    assert (a.ndays, b.ndays) == (2, 2) and a.area == u.area and a.levels == u.levels
+    one = a.split()[0].split()[0] if a.ndays == 2 else a
+    one = a.split()[0]
+    assert one.ndays == 1
+    r = one
+    for depth in (1, 2, 3):                                                # then the area, three times
+        parts = r.split()
+        assert all(p.tiled and p.tile_depth == depth and p.levels == one.levels for p in parts)
+        assert all(p.vars == one.vars and p.hours == one.hours for p in parts)
+        r = parts[0]
+    lo, hi = r.split()                                                     # then the levels
+    assert lo.levels[0] == r.levels[0] and hi.levels[1] == r.levels[1] and lo.levels[1] + 1 == hi.levels[0]
+    assert lo.area == hi.area == r.area and lo.vars == hi.vars == r.vars and lo.tile_depth == 3
+    single = r
+    while single.nlevels > 1:
         single = single.split()[0]
-    h1, h2 = single.split()
-    assert h1.vars == h2.vars and h1.area == single.area and not h1.tiled
-    one = h1
-    while len(one.hours) > 1:
-        one = one.split()[0]
-    t1, t2 = one.split()
-    assert t1.tiled and t2.tiled and t1.relpath != t2.relpath and t1.levels == one.levels
+    v1, v2 = single.split()                                                # then the variables
+    assert len(v1.vars) + len(v2.vars) == len(single.vars) and v1.hours == single.hours
+    one_var = single
+    while len(one_var.vars) > 1:
+        one_var = one_var.split()[0]
+    h1, h2 = one_var.split()                                               # then the hours
+    assert h1.vars == h2.vars == one_var.vars and len(h1.hours) + len(h2.hours) == len(one_var.hours)
+    one_hour = one_var
+    while len(one_hour.hours) > 1:
+        one_hour = one_hour.split()[0]
+    t1, t2 = one_hour.split()                                              # last resort: still smaller tiles
+    assert t1.tiled and t1.tile_depth == 4 and t1.relpath != t2.relpath
+
+
+def test_default_is_one_request_for_the_whole_period():
+    c = cfg(start="20260105", end="20260215", pressure="lnsp")              # crosses a month boundary
+    ml = [u for u in _plan(c) if u.group == ML]
+    assert len(ml) == 1 and ml[0].ndays == 42 and ml[0].levels == (60, 137) and not ml[0].tiled
+    assert len([u for u in _plan(cfg(start="20260105", end="20260215", pressure="spectral")) if u.group == LNSP]) == 1
 
 
 def test_static_never_split_by_hours():
@@ -256,21 +287,22 @@ def test_lnsp_with_levels_from_1_needs_no_extra_level_and_no_split_of_levels():
     assert ml[0].expected_messages == (7 * 137 + 1) * 24 * ml[0].ndays
 
 
-def test_split_of_a_unit_with_lnsp_covers_exactly_the_same_messages():
-    u = next(u for u in plan(cfg(pressure="lnsp", start="20260105", end="20260105")) if u.group == ML)
+def test_split_of_a_unit_with_lnsp_covers_exactly_the_needed_messages():
+    u = _no_more_tiles(next(u for u in plan(cfg(pressure="lnsp", start="20260105", end="20260105")) if u.group == ML))
+    def needed(r):          # level 1 of the model-level variables is only an extra that rides along with LNSP
+        return (len(r.ml_vars) * r.nlevels + r.has_lnsp) * len(r.hours) * r.ndays
     todo, leaves = [u], []
-    while todo:                                           # follow the whole split ladder down to the leaves
+    while todo:
         x = todo.pop()
-        parts = [] if x.tiled or (len(x.vars) == 1 and len(x.hours) > 1) else x.split()   # stop before the tiles
+        parts = [] if x.tiled or (len(x.vars) == 1 and len(x.hours) > 1) else x.split()   # stop before more tiles
         if parts:
-            assert all(p.levels == x.levels for p in parts)            # levels are never split
             todo += parts
         else:
             leaves.append(x)
-    assert [l for l in leaves if l.has_lnsp] and all(l.levels == u.levels for l in leaves)
+    assert sum(needed(l) for l in leaves) == needed(u)
     lnsp_only = [l for l in leaves if l.vars == ("LNSP",)]
-    assert all(l.cds_request()["levelist"] == "1" for l in lnsp_only)
-    assert lnsp_only and all(l.expected_messages == len(l.hours) for l in lnsp_only)
+    assert lnsp_only and all(l.cds_request()["levelist"] == "1" for l in lnsp_only)
+    assert all(l.expected_messages == len(l.hours) for l in lnsp_only)
 
 
 def test_sp_request_body():
