@@ -10,6 +10,13 @@ ERA5 → hourly FLEXPART input files, with the download **decoupled** from the p
 Only ERA5 is supported. You choose the dates, the area, the grid and the model levels; everything else is fixed.
 `./dcfe.sh --help` lists all options with their use, `./dcfe.sh <command> --help` shows one command.
 
+<video src="docs/mars_server_persp.mp4" controls muted width="100%">
+  Your viewer does not play embedded video:
+  <a href="docs/mars_server_persp.mp4">watch docs/mars_server_persp.mp4</a>.
+</video>
+
+*The MARS server's perspective on the requests (video, [direct link](docs/mars_server_persp.mp4)).*
+
 ## Options
 
 **Domain options** (`plan`, `download`, `process`; use the same values for all three):
