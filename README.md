@@ -78,8 +78,8 @@ gfortran, make and ecCodes with its Fortran interface (pkg-config `eccodes_f90`,
 needed (`fortran/fft99_lite.f90` replaces it).
 
 **Modules per site** are in `sites/<site>.sh` (`DCFE_SITE=csc|local` forces one). On **CSC (Roihu)**: `python-geo` and
-`eccodes` are always loaded; `gcc` only for `setup`, `build`, `selftest` and `--pressure spectral`. Not yet exercised
-on Roihu; if linking ecCodes' Fortran interface needs more modules (e.g. openmpi, netcdf-fortran), add them to
+`eccodes` are always loaded; `gcc` only for `setup`, `build`, `selftest` and `--pressure spectral`. Setup and the
+default download have been run on Roihu; the spectral route is still being tested there. If linking ecCodes' Fortran interface needs more modules (e.g. openmpi, netcdf-fortran), add them to
 `site_modules_fortran` in `sites/csc.sh`.
 
 ## Use
@@ -220,7 +220,8 @@ do not end at the lowest model level the ground boundary cannot be used and a wa
 
 ## Checklist: first run on CSC (Roihu)
 
-Not yet exercised on Roihu. Go in this order; stop at the first failing step and note the exact message.
+Setup and the default (`lnsp`) download have been run on Roihu and work; the spectral route and the later steps are
+still being tested. Go in this order; stop at the first failing step and note the exact message.
 
 1. **Get the code** and enter it: `git clone https://github.com/pclusius/dcFlexExtract && cd dcFlexExtract`.
 2. **CDS key:** `~/.cdsapirc` has the `url:` and `key:` lines (`chmod 600`).
